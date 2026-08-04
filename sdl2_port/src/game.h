@@ -47,11 +47,18 @@ private:
     bool m_padUp = false, m_padDown = false, m_padLeft = false, m_padRight = false;
     bool m_padConfirm = false, m_padBomb = false, m_padPause = false, m_padBack = false;
 
+    // Analog axes (updated every frame for low-latency movement)
+    float m_axisX = 0.0f;
+    float m_axisY = 0.0f;
+
     // Controllers: prefer GameController API, fallback to raw Joystick
     SDL_GameController* m_controller = nullptr;
     SDL_Joystick* m_joystick = nullptr;
     SDL_JoystickID m_joystickId = -1;
-    static constexpr float AXIS_DEADZONE = 0.35f;
+    static constexpr float AXIS_DEADZONE = 0.18f;
+    // Matte charcoal for UI text (softer than pure black)
+    static constexpr SDL_Color UI_MATTE{74, 74, 74, 255};
+    static constexpr SDL_Color UI_MATTE_SELECTED{55, 55, 55, 255};
 
     // Game entities
     Player m_player;
@@ -129,6 +136,8 @@ private:
     void drawTextCentered(const std::string& text, int fontSize, SDL_Color color, int y);
     void drawTextureCentered(const std::string& name, int y, float scale);
     void drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY);
+    void drawImageButton(const std::string& label, int y, bool selected, float btnScale = 1.0f);
+    void movementVector(float& outX, float& outY) const;
 
     // Helpers
     void initPlayerSize();

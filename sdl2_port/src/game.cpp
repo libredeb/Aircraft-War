@@ -55,12 +55,14 @@ bool Game::init(const std::string& dataPath, int screenW, int screenH, bool full
         return false;
     }
 
-    m_renderer = SDL_CreateRenderer(m_window, -1,
-                                     SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    m_renderer = SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED);
     if (!m_renderer) {
         fprintf(stderr, "Renderer creation failed: %s\n", SDL_GetError());
         return false;
     }
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    SDL_RenderSetVSync(m_renderer, 0);
+#endif
 
     SDL_ShowCursor(SDL_DISABLE);
 
@@ -100,14 +102,19 @@ void Game::shutdown() {
 void Game::run() {
     Uint32 lastTick = SDL_GetTicks();
     while (m_running) {
-        Uint32 now = SDL_GetTicks();
-        float dt = (now - lastTick) / 1000.0f;
+        Uint32 frameStart = SDL_GetTicks();
+        float dt = (frameStart - lastTick) / 1000.0f;
         if (dt > 0.05f) dt = 0.05f;
-        lastTick = now;
+        if (dt < 0.0f) dt = 0.0f;
+        lastTick = frameStart;
 
         processInput();
         update(dt);
         render();
+
+        // Cap ~60fps without VSync blocking (lower input latency)
+        Uint32 elapsed = SDL_GetTicks() - frameStart;
+        if (elapsed < 16) SDL_Delay(16 - elapsed);
     }
 }
 
@@ -206,6 +213,21 @@ void Game::openPreferredController() {
         return;
     }
 
+    // Arduino Leonardo: open as raw joystick for lowest D-pad latency
+    // (axis D-pad without GameController translation layer)
+    if (preferred >= 0) {
+        m_joystick = SDL_JoystickOpen(preferred);
+        if (m_joystick) {
+            m_joystickId = SDL_JoystickInstanceID(m_joystick);
+            SDL_JoystickEventState(SDL_ENABLE);
+            fprintf(stderr, "Opened preferred joystick (low-latency): %s (axes=%d buttons=%d)\n",
+                    SDL_JoystickName(m_joystick),
+                    SDL_JoystickNumAxes(m_joystick),
+                    SDL_JoystickNumButtons(m_joystick));
+            return;
+        }
+    }
+
     if (SDL_IsGameController(idx)) {
         m_controller = SDL_GameControllerOpen(idx);
         if (m_controller) {
@@ -215,7 +237,7 @@ void Game::openPreferredController() {
         }
     }
 
-    // Raw joystick fallback (e.g. unmapped Arduino until DB loads)
+    // Raw joystick fallback
     m_joystick = SDL_JoystickOpen(idx);
     if (m_joystick) {
         m_joystickId = SDL_JoystickInstanceID(m_joystick);
@@ -229,20 +251,23 @@ void Game::openPreferredController() {
 void Game::pollPadState() {
     bool up = false, down = false, left = false, right = false;
     bool confirm = false, bomb = false, pause = false, back = false;
+    float ax = 0.0f, ay = 0.0f;
 
     if (m_controller) {
-        up    = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_UP);
-        down  = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN);
-        left  = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT);
-        right = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+        // Prefer raw axes first (Arduino Leonardo D-pad is axis-mapped) — lowest latency
+        ax = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTX));
+        ay = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTY));
 
-        // Analog / axis D-pad (Arduino Leonardo maps D-pad to leftx/lefty)
-        float ax = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTX));
-        float ay = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTY));
         if (ay < -AXIS_DEADZONE) up = true;
         if (ay >  AXIS_DEADZONE) down = true;
         if (ax < -AXIS_DEADZONE) left = true;
         if (ax >  AXIS_DEADZONE) right = true;
+
+        // Hat / digital D-pad buttons (other controllers)
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_UP))    up = true;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN))  down = true;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  left = true;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) right = true;
 
         confirm = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_A);
         bomb = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_B)
@@ -253,10 +278,9 @@ void Game::pollPadState() {
         pause = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_START);
         back  = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_BACK);
     } else if (m_joystick) {
-        // Leonardo-style raw fallback: axis0=X, axis1=Y, b0=A, b1=B, b10=Back, b11=Start, b5/b6=shoulders
         if (SDL_JoystickNumAxes(m_joystick) >= 2) {
-            float ax = axisNorm(SDL_JoystickGetAxis(m_joystick, 0));
-            float ay = axisNorm(SDL_JoystickGetAxis(m_joystick, 1));
+            ax = axisNorm(SDL_JoystickGetAxis(m_joystick, 0));
+            ay = axisNorm(SDL_JoystickGetAxis(m_joystick, 1));
             if (ay < -AXIS_DEADZONE) up = true;
             if (ay >  AXIS_DEADZONE) down = true;
             if (ax < -AXIS_DEADZONE) left = true;
@@ -270,6 +294,15 @@ void Game::pollPadState() {
         back = btn(10);
         pause = btn(11);
     }
+
+    // Snap near-digital axes to ±1 for snappier D-pad feel (Leonardo)
+    if (std::fabs(ax) > 0.7f) ax = (ax > 0.0f) ? 1.0f : -1.0f;
+    else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0.0f;
+    if (std::fabs(ay) > 0.7f) ay = (ay > 0.0f) ? 1.0f : -1.0f;
+    else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0.0f;
+
+    m_axisX = ax;
+    m_axisY = ay;
 
     applyEdge(up, m_padUp, m_keyUpPressed);
     applyEdge(down, m_padDown, m_keyDownPressed);
@@ -288,6 +321,35 @@ void Game::pollPadState() {
     m_keyBomb = m_kbBomb || bomb;
     m_keyPause = m_kbPause || pause;
     m_keyBack = m_kbBack || back;
+}
+
+void Game::movementVector(float& outX, float& outY) const {
+    float dx = 0.0f, dy = 0.0f;
+
+    // Analog axes take priority when active (lowest latency path for Leonardo)
+    if (std::fabs(m_axisX) > AXIS_DEADZONE || std::fabs(m_axisY) > AXIS_DEADZONE) {
+        dx = m_axisX;
+        dy = m_axisY;
+    } else {
+        if (m_keyLeft)  dx -= 1.0f;
+        if (m_keyRight) dx += 1.0f;
+        if (m_keyUp)    dy -= 1.0f;
+        if (m_keyDown)  dy += 1.0f;
+    }
+
+    // Keyboard always merges so both can be used together
+    if (m_kbLeft)  dx = -1.0f;
+    if (m_kbRight) dx =  1.0f;
+    if (m_kbUp)    dy = -1.0f;
+    if (m_kbDown)  dy =  1.0f;
+
+    float mag = std::sqrt(dx * dx + dy * dy);
+    if (mag > 1.0f) {
+        dx /= mag;
+        dy /= mag;
+    }
+    outX = dx;
+    outY = dy;
 }
 
 void Game::processInput() {
@@ -323,6 +385,22 @@ void Game::processInput() {
                 m_kbBack = down; if (firstPress) m_keyBackPressed = true; break;
             default: break;
             }
+        }
+
+        // Apply axis events immediately (don't wait for end-of-frame poll)
+        if (e.type == SDL_CONTROLLERAXISMOTION && m_controller) {
+            float v = axisNorm(e.caxis.value);
+            if (std::fabs(v) < AXIS_DEADZONE) v = 0.0f;
+            else if (std::fabs(v) > 0.7f) v = (v > 0.0f) ? 1.0f : -1.0f;
+            if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) m_axisX = v;
+            if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) m_axisY = v;
+        }
+        if (e.type == SDL_JOYAXISMOTION && m_joystick && e.jaxis.which == m_joystickId) {
+            float v = axisNorm(e.jaxis.value);
+            if (std::fabs(v) < AXIS_DEADZONE) v = 0.0f;
+            else if (std::fabs(v) > 0.7f) v = (v > 0.0f) ? 1.0f : -1.0f;
+            if (e.jaxis.axis == 0) m_axisX = v;
+            if (e.jaxis.axis == 1) m_axisY = v;
         }
 
         if (e.type == SDL_CONTROLLERDEVICEADDED) {
@@ -460,18 +538,10 @@ void Game::updateSettings(float /*dt*/) {
 void Game::updatePlaying(float dt) {
     if (m_keyPausePressed) { pauseGame(); return; }
 
-    // Player movement
+    // Player movement (analog axes + keyboard, low-latency)
     if (m_player.alive && !m_player.exploding) {
         float dx = 0, dy = 0;
-        if (m_keyUp) dy -= 1;
-        if (m_keyDown) dy += 1;
-        if (m_keyLeft) dx -= 1;
-        if (m_keyRight) dx += 1;
-        if (dx != 0 && dy != 0) {
-            float inv = 1.0f / sqrtf(2.0f);
-            dx *= inv;
-            dy *= inv;
-        }
+        movementVector(dx, dy);
         m_player.x += dx * m_player.speed * dt;
         m_player.y += dy * m_player.speed * dt;
 
@@ -580,7 +650,7 @@ void Game::startGame() {
     m_player.explodeTimer = 0;
     m_player.x = (m_screenW - m_player.w) / 2.0f;
     m_player.y = m_screenH - m_player.h - 20.0f;
-    m_player.speed = m_screenW * 0.6f;
+    m_player.speed = m_screenW * 1.05f;  // snappier response on D-pad
 
     upgradeGrade();
     m_res.playSound("game_music", -1);
@@ -929,47 +999,54 @@ void Game::renderEntities() {
 }
 
 void Game::renderHUD() {
-    int fontSize = static_cast<int>(28 * m_scale / 1.5f);
+    int margin = static_cast<int>(18 * m_scale / 1.5f);
+    int fontSize = static_cast<int>(30 * m_scale / 1.5f);
 
-    // Score
-    char scoreBuf[32];
-    snprintf(scoreBuf, sizeof(scoreBuf), "%07d", m_score);
-    drawTextCentered(scoreBuf, fontSize, {255, 255, 255, 255}, static_cast<int>(15 * m_scale / 1.5f));
+    // Pause icon (top-left) + score to its right — matches original layout / reference
+    const char* pauseTex = (m_state == GameState::Paused) ? "Pause_02" : "Pause_01";
+    int pw = 0, ph = 0;
+    m_res.texSizeScaled(pauseTex, m_scale * 0.85f, &pw, &ph);
+    if (pw > 0) {
+        SDL_Rect pauseDst = { margin, margin, pw, ph };
+        SDL_Texture* pt = m_res.tex(pauseTex);
+        if (pt) SDL_RenderCopy(m_renderer, pt, nullptr, &pauseDst);
 
-    // Bomb indicator
-    if (m_bombs > 0) {
-        SDL_Texture* bombTex = m_res.tex("Bomb");
-        if (bombTex) {
-            int bw, bh;
-            m_res.texSizeScaled("Bomb", m_scale * 0.5f, &bw, &bh);
-            int bx = static_cast<int>(10 * m_scale / 1.5f);
-            int by = m_screenH - bh - bx;
-            SDL_Rect dst = { bx, by, bw, bh };
-            SDL_RenderCopy(m_renderer, bombTex, nullptr, &dst);
-
-            char bombBuf[8];
-            snprintf(bombBuf, sizeof(bombBuf), "x%d", m_bombs);
-            int tw, th;
-            SDL_Texture* textTex = m_res.renderText(bombBuf, fontSize, {255, 255, 255, 255}, &tw, &th);
-            if (textTex) {
-                SDL_Rect textDst = { bx + bw + 5, by + (bh - th) / 2, tw, th };
-                SDL_RenderCopy(m_renderer, textTex, nullptr, &textDst);
-                SDL_DestroyTexture(textTex);
-            }
+        char scoreBuf[32];
+        snprintf(scoreBuf, sizeof(scoreBuf), "%d", m_score);
+        int tw = 0, th = 0;
+        SDL_Texture* scoreTex = m_res.renderText(scoreBuf, fontSize, UI_MATTE, &tw, &th);
+        if (scoreTex) {
+            SDL_Rect scoreDst = { margin + pw + static_cast<int>(8 * m_scale / 1.5f),
+                                  margin + (ph - th) / 2, tw, th };
+            SDL_RenderCopy(m_renderer, scoreTex, nullptr, &scoreDst);
+            SDL_DestroyTexture(scoreTex);
         }
     }
 
-    // Button hint
-    int hintSize = static_cast<int>(16 * m_scale / 1.5f);
-    const char* hint = "[Arrows] Move  [Z] Confirm  [X] Bomb  [P] Pause";
-    if (m_state == GameState::Playing) {
-        int tw, th;
-        SDL_Texture* hintTex = m_res.renderText(hint, hintSize, {180, 180, 180, 150}, &tw, &th);
-        if (hintTex) {
-            SDL_Rect dst = { (m_screenW - tw) / 2, m_screenH - th - 5, tw, th };
-            SDL_SetTextureAlphaMod(hintTex, 100);
-            SDL_RenderCopy(m_renderer, hintTex, nullptr, &dst);
-            SDL_DestroyTexture(hintTex);
+    // Bomb icon + count (bottom-left), always visible while playing
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled("Bomb", m_scale * 0.55f, &bw, &bh);
+    if (bw > 0) {
+        int bx = margin;
+        int by = m_screenH - bh - margin;
+        SDL_Texture* bombTex = m_res.tex("Bomb");
+        if (bombTex) {
+            SDL_Rect dst = { bx, by, bw, bh };
+            if (m_bombs <= 0) SDL_SetTextureAlphaMod(bombTex, 90);
+            else SDL_SetTextureAlphaMod(bombTex, 255);
+            SDL_RenderCopy(m_renderer, bombTex, nullptr, &dst);
+            SDL_SetTextureAlphaMod(bombTex, 255);
+        }
+
+        char bombBuf[8];
+        snprintf(bombBuf, sizeof(bombBuf), "x%d", m_bombs);
+        int tw = 0, th = 0;
+        SDL_Texture* countTex = m_res.renderText(bombBuf, fontSize, UI_MATTE, &tw, &th);
+        if (countTex) {
+            SDL_Rect textDst = { bx + bw + static_cast<int>(6 * m_scale / 1.5f),
+                                 by + (bh - th) / 2, tw, th };
+            SDL_RenderCopy(m_renderer, countTex, nullptr, &textDst);
+            SDL_DestroyTexture(countTex);
         }
     }
 }
@@ -997,25 +1074,49 @@ void Game::drawTextureCentered(const std::string& name, int y, float texScale) {
     SDL_RenderCopy(m_renderer, t, nullptr, &dst);
 }
 
+void Game::drawImageButton(const std::string& label, int y, bool selected, float btnScale) {
+    const char* texName = selected ? "button_2_2" : "button_2_1";
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled(texName, btnScale, &bw, &bh);
+    if (bw <= 0) {
+        // Fallback if textures missing
+        drawTextCentered(label, static_cast<int>(28 * m_scale / 1.5f),
+                         selected ? UI_MATTE_SELECTED : UI_MATTE, y);
+        return;
+    }
+
+    SDL_Rect dst = { (m_screenW - bw) / 2, y, bw, bh };
+    SDL_Texture* btn = m_res.tex(texName);
+    if (btn) SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
+
+    int fontSize = static_cast<int>(28 * m_scale / 1.5f);
+    int tw = 0, th = 0;
+    SDL_Color color = selected ? UI_MATTE_SELECTED : UI_MATTE;
+    SDL_Texture* text = m_res.renderText(label, fontSize, color, &tw, &th);
+    if (text) {
+        SDL_Rect td = { dst.x + (bw - tw) / 2, dst.y + (bh - th) / 2, tw, th };
+        SDL_RenderCopy(m_renderer, text, nullptr, &td);
+        SDL_DestroyTexture(text);
+    }
+}
+
 void Game::drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY) {
-    int fontSize = static_cast<int>(32 * m_scale / 1.5f);
-    int spacing = static_cast<int>(60 * m_scale / 1.5f);
+    float btnScale = m_scale * 0.95f;
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled("button_2_1", btnScale, &bw, &bh);
+    int spacing = bh > 0 ? bh + static_cast<int>(18 * m_scale / 1.5f)
+                         : static_cast<int>(60 * m_scale / 1.5f);
 
     for (int i = 0; i < static_cast<int>(items.size()); i++) {
-        SDL_Color color = (i == selectedIdx) ? SDL_Color{255, 220, 50, 255} : SDL_Color{220, 220, 220, 255};
-        std::string label = items[i];
-        if (i == selectedIdx) label = "> " + label + " <";
-
-        int y = startY + i * spacing;
-        drawTextCentered(label, fontSize, color, y);
+        drawImageButton(items[i], startY + i * spacing, i == selectedIdx, btnScale);
     }
 }
 
 void Game::renderMainMenu() {
-    drawTextureCentered("LOGO", m_screenH / 5, m_scale);
+    drawTextureCentered("LOGO", m_screenH / 6, m_scale);
 
-    std::vector<std::string> items = { "START GAME", "SETTINGS", "EXIT" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 55 / 100);
+    std::vector<std::string> items = { "Start Game", "Settings", "Exit" };
+    drawMenuItems(items, m_menuSelection, m_screenH * 52 / 100);
 }
 
 void Game::renderPauseMenu() {
@@ -1025,10 +1126,10 @@ void Game::renderPauseMenu() {
     SDL_RenderFillRect(m_renderer, &overlay);
 
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("PAUSED", titleSize, {255, 255, 255, 255}, m_screenH / 4);
+    drawTextCentered("PAUSED", titleSize, {210, 210, 210, 255}, m_screenH / 5);
 
-    std::vector<std::string> items = { "CONTINUE", "RESTART", "QUIT" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 40 / 100);
+    std::vector<std::string> items = { "Continue", "Restart", "Quit" };
+    drawMenuItems(items, m_menuSelection, m_screenH * 38 / 100);
 }
 
 void Game::renderGameOverScreen() {
@@ -1038,24 +1139,24 @@ void Game::renderGameOverScreen() {
     SDL_RenderFillRect(m_renderer, &overlay);
 
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("GAME OVER", titleSize, {255, 80, 80, 255}, m_screenH / 5);
+    drawTextCentered("Game Over", titleSize, {210, 210, 210, 255}, m_screenH / 6);
 
     char scoreBuf[64];
     snprintf(scoreBuf, sizeof(scoreBuf), "Score: %d", m_score);
-    int scoreSize = static_cast<int>(36 * m_scale / 1.5f);
-    drawTextCentered(scoreBuf, scoreSize, {255, 255, 255, 255}, m_screenH / 5 + titleSize + 20);
+    int scoreSize = static_cast<int>(32 * m_scale / 1.5f);
+    drawTextCentered(scoreBuf, scoreSize, {210, 210, 210, 255}, m_screenH / 6 + titleSize + 16);
 
-    std::vector<std::string> items = { "PLAY AGAIN", "QUIT" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 50 / 100);
+    std::vector<std::string> items = { "Play Again", "Quit" };
+    drawMenuItems(items, m_menuSelection, m_screenH * 48 / 100);
 }
 
 void Game::renderSettingsMenu() {
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("SETTINGS", titleSize, {255, 255, 255, 255}, m_screenH / 5);
+    drawTextCentered("Settings", titleSize, UI_MATTE, m_screenH / 5);
 
-    std::string sndLabel = std::string("SOUND: ") + (m_soundOn ? "ON" : "OFF");
-    std::string musLabel = std::string("MUSIC: ") + (m_musicOn ? "ON" : "OFF");
-    std::vector<std::string> items = { sndLabel, musLabel, "BACK" };
+    std::string sndLabel = std::string("Sound: ") + (m_soundOn ? "ON" : "OFF");
+    std::string musLabel = std::string("Music: ") + (m_musicOn ? "ON" : "OFF");
+    std::vector<std::string> items = { sndLabel, musLabel, "Back" };
     drawMenuItems(items, m_menuSelection, m_screenH * 40 / 100);
 }
 
