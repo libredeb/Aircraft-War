@@ -56,9 +56,9 @@ private:
     SDL_Joystick* m_joystick = nullptr;
     SDL_JoystickID m_joystickId = -1;
     static constexpr float AXIS_DEADZONE = 0.18f;
-    // Matte charcoal for UI text (softer than pure black)
-    static constexpr SDL_Color UI_MATTE{74, 74, 74, 255};
-    static constexpr SDL_Color UI_MATTE_SELECTED{55, 55, 55, 255};
+    // Matte charcoal for UI text on light backgrounds (softer than pure black)
+    static constexpr SDL_Color UI_MATTE{58, 58, 58, 255};
+    static constexpr SDL_Color UI_MATTE_SELECTED{40, 40, 40, 255};
 
     // Game entities
     Player m_player;

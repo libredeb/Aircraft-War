@@ -112,9 +112,47 @@ void Game::run() {
         update(dt);
         render();
 
-        // Cap ~60fps without VSync blocking (lower input latency)
-        Uint32 elapsed = SDL_GetTicks() - frameStart;
-        if (elapsed < 16) SDL_Delay(16 - elapsed);
+        // Keep sampling axes during the frame wait to cut D-pad latency
+        while (true) {
+            Uint32 elapsed = SDL_GetTicks() - frameStart;
+            if (elapsed >= 16) break;
+            SDL_PumpEvents();
+            // Refresh axes only (do not reset edge flags mid-frame)
+            if (m_joystick) {
+                if (SDL_JoystickNumAxes(m_joystick) >= 2) {
+                    float ax = axisNorm(SDL_JoystickGetAxis(m_joystick, 0));
+                    float ay = axisNorm(SDL_JoystickGetAxis(m_joystick, 1));
+                    if (std::fabs(ax) > 0.7f) ax = (ax > 0) ? 1.0f : -1.0f;
+                    else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0;
+                    if (std::fabs(ay) > 0.7f) ay = (ay > 0) ? 1.0f : -1.0f;
+                    else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0;
+                    m_axisX = ax;
+                    m_axisY = ay;
+                }
+                if (SDL_JoystickNumHats(m_joystick) > 0) {
+                    Uint8 hat = SDL_JoystickGetHat(m_joystick, 0);
+                    if (hat & SDL_HAT_LEFT)  m_axisX = -1.0f;
+                    if (hat & SDL_HAT_RIGHT) m_axisX =  1.0f;
+                    if (hat & SDL_HAT_UP)    m_axisY = -1.0f;
+                    if (hat & SDL_HAT_DOWN)  m_axisY =  1.0f;
+                    if (hat == SDL_HAT_CENTERED &&
+                        std::fabs(m_axisX) < AXIS_DEADZONE &&
+                        std::fabs(m_axisY) < AXIS_DEADZONE) {
+                        /* keep axis values from sticks */
+                    }
+                }
+            } else if (m_controller) {
+                float ax = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTX));
+                float ay = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTY));
+                if (std::fabs(ax) > 0.7f) ax = (ax > 0) ? 1.0f : -1.0f;
+                else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0;
+                if (std::fabs(ay) > 0.7f) ay = (ay > 0) ? 1.0f : -1.0f;
+                else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0;
+                m_axisX = ax;
+                m_axisY = ay;
+            }
+            SDL_Delay(1);
+        }
     }
 }
 
@@ -285,6 +323,14 @@ void Game::pollPadState() {
             if (ay >  AXIS_DEADZONE) down = true;
             if (ax < -AXIS_DEADZONE) left = true;
             if (ax >  AXIS_DEADZONE) right = true;
+        }
+        // Hat / POV (some pads expose D-pad only as a hat)
+        if (SDL_JoystickNumHats(m_joystick) > 0) {
+            Uint8 hat = SDL_JoystickGetHat(m_joystick, 0);
+            if (hat & SDL_HAT_UP)    { up = true;    ay = -1.0f; }
+            if (hat & SDL_HAT_DOWN)  { down = true;  ay =  1.0f; }
+            if (hat & SDL_HAT_LEFT)  { left = true;  ax = -1.0f; }
+            if (hat & SDL_HAT_RIGHT) { right = true; ax =  1.0f; }
         }
         auto btn = [&](int b) {
             return b < SDL_JoystickNumButtons(m_joystick) && SDL_JoystickGetButton(m_joystick, b);
@@ -650,7 +696,7 @@ void Game::startGame() {
     m_player.explodeTimer = 0;
     m_player.x = (m_screenW - m_player.w) / 2.0f;
     m_player.y = m_screenH - m_player.h - 20.0f;
-    m_player.speed = m_screenW * 1.05f;  // snappier response on D-pad
+    m_player.speed = m_screenW * 1.35f;  // responsive D-pad on 720px screen
 
     upgradeGrade();
     m_res.playSound("game_music", -1);
@@ -999,55 +1045,65 @@ void Game::renderEntities() {
 }
 
 void Game::renderHUD() {
-    int margin = static_cast<int>(18 * m_scale / 1.5f);
-    int fontSize = static_cast<int>(30 * m_scale / 1.5f);
+    int margin = static_cast<int>(20 * m_scale / 1.5f);
+    int fontSize = static_cast<int>(32 * m_scale / 1.5f);
 
-    // Pause icon (top-left) + score to its right — matches original layout / reference
-    const char* pauseTex = (m_state == GameState::Paused) ? "Pause_02" : "Pause_01";
+    // --- Top-left: Pause + Score ---
+    const char* pauseName = (m_state == GameState::Paused) ? "Pause_02" : "Pause_01";
     int pw = 0, ph = 0;
-    m_res.texSizeScaled(pauseTex, m_scale * 0.85f, &pw, &ph);
-    if (pw > 0) {
-        SDL_Rect pauseDst = { margin, margin, pw, ph };
-        SDL_Texture* pt = m_res.tex(pauseTex);
-        if (pt) SDL_RenderCopy(m_renderer, pt, nullptr, &pauseDst);
+    m_res.texSizeScaled(pauseName, m_scale * 1.1f, &pw, &ph);
+    if (pw <= 0) { pw = static_cast<int>(48 * m_scale / 1.5f); ph = pw; }
 
-        char scoreBuf[32];
-        snprintf(scoreBuf, sizeof(scoreBuf), "%d", m_score);
-        int tw = 0, th = 0;
-        SDL_Texture* scoreTex = m_res.renderText(scoreBuf, fontSize, UI_MATTE, &tw, &th);
-        if (scoreTex) {
-            SDL_Rect scoreDst = { margin + pw + static_cast<int>(8 * m_scale / 1.5f),
-                                  margin + (ph - th) / 2, tw, th };
-            SDL_RenderCopy(m_renderer, scoreTex, nullptr, &scoreDst);
-            SDL_DestroyTexture(scoreTex);
-        }
+    SDL_Rect pauseDst = { margin, margin, pw, ph };
+    SDL_Texture* pt = m_res.tex(pauseName);
+    if (pt) {
+        SDL_RenderCopy(m_renderer, pt, nullptr, &pauseDst);
+    } else {
+        // Fallback pause bars
+        SDL_SetRenderDrawColor(m_renderer, UI_MATTE.r, UI_MATTE.g, UI_MATTE.b, 255);
+        int barW = pw / 5;
+        int gap = pw / 5;
+        SDL_Rect b1 = { pauseDst.x + gap, pauseDst.y + ph / 6, barW, ph * 2 / 3 };
+        SDL_Rect b2 = { pauseDst.x + gap * 2 + barW, pauseDst.y + ph / 6, barW, ph * 2 / 3 };
+        SDL_RenderFillRect(m_renderer, &b1);
+        SDL_RenderFillRect(m_renderer, &b2);
     }
 
-    // Bomb icon + count (bottom-left), always visible while playing
-    int bw = 0, bh = 0;
-    m_res.texSizeScaled("Bomb", m_scale * 0.55f, &bw, &bh);
-    if (bw > 0) {
-        int bx = margin;
-        int by = m_screenH - bh - margin;
-        SDL_Texture* bombTex = m_res.tex("Bomb");
-        if (bombTex) {
-            SDL_Rect dst = { bx, by, bw, bh };
-            if (m_bombs <= 0) SDL_SetTextureAlphaMod(bombTex, 90);
-            else SDL_SetTextureAlphaMod(bombTex, 255);
-            SDL_RenderCopy(m_renderer, bombTex, nullptr, &dst);
-            SDL_SetTextureAlphaMod(bombTex, 255);
-        }
+    char scoreBuf[32];
+    snprintf(scoreBuf, sizeof(scoreBuf), "%d", m_score);
+    int tw = 0, th = 0;
+    SDL_Texture* scoreTex = m_res.renderText(scoreBuf, fontSize, UI_MATTE, &tw, &th);
+    if (scoreTex) {
+        SDL_Rect scoreDst = { margin + pw + static_cast<int>(10 * m_scale / 1.5f),
+                              margin + (ph - th) / 2, tw, th };
+        SDL_RenderCopy(m_renderer, scoreTex, nullptr, &scoreDst);
+        SDL_DestroyTexture(scoreTex);
+    }
 
-        char bombBuf[8];
-        snprintf(bombBuf, sizeof(bombBuf), "x%d", m_bombs);
-        int tw = 0, th = 0;
-        SDL_Texture* countTex = m_res.renderText(bombBuf, fontSize, UI_MATTE, &tw, &th);
-        if (countTex) {
-            SDL_Rect textDst = { bx + bw + static_cast<int>(6 * m_scale / 1.5f),
-                                 by + (bh - th) / 2, tw, th };
-            SDL_RenderCopy(m_renderer, countTex, nullptr, &textDst);
-            SDL_DestroyTexture(countTex);
-        }
+    // --- Bottom-left: Bomb + count ---
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled("Bomb", m_scale * 0.7f, &bw, &bh);
+    if (bw <= 0) { bw = static_cast<int>(56 * m_scale / 1.5f); bh = bw; }
+
+    int bx = margin;
+    int by = m_screenH - bh - margin;
+    SDL_Texture* bombTex = m_res.tex("Bomb");
+    if (bombTex) {
+        SDL_Rect dst = { bx, by, bw, bh };
+        SDL_SetTextureAlphaMod(bombTex, m_bombs > 0 ? 255 : 120);
+        SDL_RenderCopy(m_renderer, bombTex, nullptr, &dst);
+        SDL_SetTextureAlphaMod(bombTex, 255);
+    }
+
+    char bombBuf[8];
+    snprintf(bombBuf, sizeof(bombBuf), "x%d", m_bombs);
+    tw = th = 0;
+    SDL_Texture* countTex = m_res.renderText(bombBuf, fontSize, UI_MATTE, &tw, &th);
+    if (countTex) {
+        SDL_Rect textDst = { bx + bw + static_cast<int>(8 * m_scale / 1.5f),
+                             by + (bh - th) / 2, tw, th };
+        SDL_RenderCopy(m_renderer, countTex, nullptr, &textDst);
+        SDL_DestroyTexture(countTex);
     }
 }
 
@@ -1078,16 +1134,26 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
     const char* texName = selected ? "button_2_2" : "button_2_1";
     int bw = 0, bh = 0;
     m_res.texSizeScaled(texName, btnScale, &bw, &bh);
+
+    // Guaranteed visible capsule even if PNG fails to load
     if (bw <= 0) {
-        // Fallback if textures missing
-        drawTextCentered(label, static_cast<int>(28 * m_scale / 1.5f),
-                         selected ? UI_MATTE_SELECTED : UI_MATTE, y);
-        return;
+        bw = static_cast<int>(m_screenW * 0.55f);
+        bh = static_cast<int>(56 * m_scale / 1.5f);
     }
 
     SDL_Rect dst = { (m_screenW - bw) / 2, y, bw, bh };
     SDL_Texture* btn = m_res.tex(texName);
-    if (btn) SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
+    if (btn) {
+        SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
+    } else {
+        // Drawn capsule fallback
+        SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+        Uint8 fill = selected ? 200 : 220;
+        SDL_SetRenderDrawColor(m_renderer, fill, fill, fill, 255);
+        SDL_RenderFillRect(m_renderer, &dst);
+        SDL_SetRenderDrawColor(m_renderer, 60, 60, 60, 255);
+        SDL_RenderDrawRect(m_renderer, &dst);
+    }
 
     int fontSize = static_cast<int>(28 * m_scale / 1.5f);
     int tw = 0, th = 0;

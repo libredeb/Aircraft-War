@@ -29,8 +29,11 @@ target_link_libraries(aircraftwar
 )
 
 set(DATA_DIR "${CMAKE_INSTALL_PREFIX}/share/aircraftwar")
+# DEV_DATA_DIR = repo root (parent of sdl2_port/) so local runs find Image/sound without -d
+get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
 target_compile_definitions(aircraftwar PRIVATE
     DATA_DIR="${DATA_DIR}"
+    DEV_DATA_DIR="${REPO_ROOT}"
 )
 
 install(TARGETS aircraftwar DESTINATION bin)

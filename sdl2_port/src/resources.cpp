@@ -20,8 +20,22 @@ bool Resources::init(SDL_Renderer* renderer, const std::string& dataPath) {
     };
     for (auto& name : images) {
         if (!loadTexture(name, m_dataPath + "/Image/" + name + ".png"))
-            fprintf(stderr, "Warning: failed to load texture %s\n", name);
+            fprintf(stderr, "Warning: failed to load texture %s from %s/Image/\n",
+                    name, m_dataPath.c_str());
     }
+
+    // Critical UI assets — loud failure if missing
+    const char* uiRequired[] = { "button_2_1", "button_2_2", "Pause_01", "Bomb", "LOGO" };
+    for (auto& name : uiRequired) {
+        if (!tex(name))
+            fprintf(stderr, "ERROR: UI texture '%s' missing — check -d / data path\n", name);
+    }
+
+    TTF_Font* testFont = font(24);
+    if (!testFont)
+        fprintf(stderr, "ERROR: font fzmw.ttf missing under %s/\n", m_dataPath.c_str());
+    else
+        fprintf(stderr, "UI assets OK (buttons/pause/bomb/font)\n");
 
     const char* sounds[] = {
         "achievement", "bomb", "bullet", "button",
