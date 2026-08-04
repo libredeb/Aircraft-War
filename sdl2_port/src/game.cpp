@@ -113,20 +113,19 @@ void Game::run() {
     while (m_running) {
         Uint32 frameStart = SDL_GetTicks();
 
-        // 1) Input first — then move with fresh pad state (minimizes press→motion lag)
         processInput();
 
-        Uint32 now = SDL_GetTicks();
-        float dt = (now - lastTick) / 1000.0f;
+        float dt = (frameStart - lastTick) / 1000.0f;
         if (dt > 0.05f) dt = 0.05f;
-        if (dt < 0.0f) dt = 0.0f;
-        lastTick = now;
+        if (dt < 0.001f) dt = 0.001f;
+        lastTick = frameStart;
 
         update(dt);
         render();
 
-        // 2) Cap ~60fps while still polling pad and moving the player.
-        //    A single long SDL_Delay() would ignore D-Pad until it wakes.
+        // Cap ~60fps. Poll pad axes and move the player during the wait
+        // so D-pad response isn't gated by the frame boundary.
+        Uint32 microTick = SDL_GetTicks();
         while (true) {
             Uint32 elapsed = SDL_GetTicks() - frameStart;
             if (elapsed >= 16) break;
@@ -134,17 +133,12 @@ void Game::run() {
             SDL_PumpEvents();
             pollAxesOnly();
 
-            now = SDL_GetTicks();
-            float microDt = (now - lastTick) / 1000.0f;
-            if (microDt > 0.0f) {
-                if (microDt > 0.05f) microDt = 0.05f;
-                lastTick = now;
-                if (m_state == GameState::Playing)
-                    applyPlayerMovement(microDt);
-            }
+            Uint32 now = SDL_GetTicks();
+            float microDt = (now - microTick) / 1000.0f;
+            microTick = now;
+            if (microDt > 0.0f && microDt < 0.05f && m_state == GameState::Playing)
+                applyPlayerMovement(microDt);
 
-            // Sleep only if we still have comfortable headroom (Pi scheduler
-            // often turns Delay(1) into several ms).
             elapsed = SDL_GetTicks() - frameStart;
             if (elapsed < 12)
                 SDL_Delay(1);
@@ -508,8 +502,8 @@ void Game::processInput() {
 
         if (e.type == SDL_CONTROLLERDEVICEADDED) {
             fprintf(stderr, "Controller added (index %d)\n", e.cdevice.which);
-            if (!m_controller && !m_joystick) openPreferredController();
-            else if (!m_controller && isPreferredController(e.cdevice.which)) openPreferredController();
+            if (!m_controller && !m_joystick)
+                openPreferredController();
         }
         if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
             if (e.cdevice.which == m_joystickId) {
@@ -519,7 +513,8 @@ void Game::processInput() {
             }
         }
         if (e.type == SDL_JOYDEVICEADDED) {
-            if (!m_controller && !m_joystick) openPreferredController();
+            if (!m_controller && !m_joystick)
+                openPreferredController();
         }
         if (e.type == SDL_JOYDEVICEREMOVED) {
             if (e.jdevice.which == m_joystickId) {
