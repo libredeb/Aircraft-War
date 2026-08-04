@@ -44,7 +44,7 @@ cmake --build build -j
 ### Ejecutar
 
 ```bash
-# Desde sdl2_port/ (el binario encuentra solo los assets del repo)
+# Desde sdl2_port/ (resuelve assets relativos al binario)
 ./build/aircraftwar
 
 # Pantalla completa (típico en la consola / Pi)
@@ -53,9 +53,14 @@ cmake --build build -j
 # Resolución distinta
 ./build/aircraftwar -w 720 -h 720
 
-# Si hace falta forzar la ruta a Image/, sound/ y fzmw.ttf:
+# Forzar ruta a la carpeta que contiene Image/, sound/, fzmw.ttf:
 ./build/aircraftwar -d /ruta/al/repo
 ```
+
+La ruta de datos se busca **a partir del binario** (no de una ruta fija de compilación):
+
+1. `<bindir>/../share/aircraftwar` — layout de instalación (`/usr/local/bin` → `/usr/local/share/aircraftwar`)
+2. `<bindir>`, `<bindir>/..`, `<bindir>/../..` — builds locales (`sdl2_port/build` → repo)
 
 ### Instalar en el sistema (Linux / Pi)
 

@@ -2,84 +2,76 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <unistd.h>
 #include <libgen.h>
+#include <climits>
 
 static bool hasImageDir(const std::string& root) {
     return access((root + "/Image").c_str(), F_OK) == 0;
 }
 
-static std::string findDataPath(const char* argv0) {
-    // 1) Compile-time repo root (dev builds)
-#ifdef DEV_DATA_DIR
-    if (hasImageDir(DEV_DATA_DIR)) {
-        fprintf(stderr, "Data path: %s (DEV_DATA_DIR)\n", DEV_DATA_DIR);
-        return DEV_DATA_DIR;
-    }
-#endif
-
-    // 2) Installed prefix
-#ifdef DATA_DIR
-    if (hasImageDir(DATA_DIR)) {
-        fprintf(stderr, "Data path: %s (DATA_DIR)\n", DATA_DIR);
-        return DATA_DIR;
-    }
-#endif
-
-    // 3) Relative to executable (Linux /proc, and argv0 dirname)
-    auto tryExeDir = [](const std::string& dir) -> std::string {
-        if (hasImageDir(dir)) return dir;
-        if (hasImageDir(dir + "/..")) return dir + "/..";
-        if (hasImageDir(dir + "/../..")) return dir + "/../..";
-        return {};
-    };
-
+// Directory containing the running binary (Linux: /proc/self/exe).
+static std::string executableDir(const char* argv0) {
 #if defined(__linux__)
-    char buf[4096];
+    char buf[PATH_MAX];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (len > 0) {
         buf[len] = '\0';
-        std::string exeDir = dirname(buf);
-        std::string found = tryExeDir(exeDir);
-        if (!found.empty()) {
-            fprintf(stderr, "Data path: %s (exe)\n", found.c_str());
-            return found;
-        }
+        return std::string(dirname(buf));
     }
 #endif
-
     if (argv0 && argv0[0]) {
-        char tmp[4096];
+        char tmp[PATH_MAX];
         strncpy(tmp, argv0, sizeof(tmp) - 1);
         tmp[sizeof(tmp) - 1] = '\0';
-        std::string exeDir = dirname(tmp);
-        // Resolve relative argv0 against cwd
-        if (exeDir == "." || (exeDir.size() > 0 && exeDir[0] != '/')) {
-            char cwd[4096];
-            if (getcwd(cwd, sizeof(cwd))) {
-                if (exeDir == ".") exeDir = cwd;
-                else exeDir = std::string(cwd) + "/" + exeDir;
-            }
+        // Absolute path in argv0
+        if (tmp[0] == '/') return std::string(dirname(tmp));
+        // Relative: resolve against cwd
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd))) {
+            std::string full = std::string(cwd) + "/" + tmp;
+            strncpy(tmp, full.c_str(), sizeof(tmp) - 1);
+            return std::string(dirname(tmp));
         }
-        std::string found = tryExeDir(exeDir);
-        if (!found.empty()) {
-            fprintf(stderr, "Data path: %s (argv0)\n", found.c_str());
-            return found;
-        }
+        return std::string(dirname(tmp));
     }
+    char cwd[PATH_MAX];
+    if (getcwd(cwd, sizeof(cwd))) return cwd;
+    return ".";
+}
 
-    // 4) CWD heuristics
-    const char* cwdCandidates[] = {
-        ".", "..", "../..", "sdl2_port/..",
+static std::string findDataPath(const char* argv0) {
+    const std::string exeDir = executableDir(argv0);
+
+    // Candidates relative to the binary location (order matters):
+    //  1) install: /usr/local/bin/aircraftwar → /usr/local/share/aircraftwar
+    //  2) Image/ next to the binary
+    //  3) one/two levels up (sdl2_port/build → repo root)
+    const std::vector<std::string> candidates = {
+        exeDir + "/../share/aircraftwar",
+        exeDir + "/share/aircraftwar",
+        exeDir,
+        exeDir + "/..",
+        exeDir + "/../..",
+#ifdef DATA_DIR
+        DATA_DIR,
+#endif
+        ".",
+        "..",
+        "../..",
     };
-    for (auto* c : cwdCandidates) {
+
+    for (const auto& c : candidates) {
         if (hasImageDir(c)) {
-            fprintf(stderr, "Data path: %s (cwd)\n", c);
+            // Normalize "bin/../share/..." for logs
+            fprintf(stderr, "Data path: %s (from binary at %s)\n", c.c_str(), exeDir.c_str());
             return c;
         }
     }
 
-    fprintf(stderr, "WARNING: Image/ not found. Use: aircraftwar -d /path/to/repo\n");
+    fprintf(stderr, "WARNING: Image/ not found near binary (%s). Use: aircraftwar -d /path/to/data\n",
+            exeDir.c_str());
     return ".";
 }
 
@@ -103,7 +95,10 @@ int main(int argc, char* argv[]) {
                    "  -f, --fullscreen     Run in fullscreen mode\n"
                    "  -w, --width  <N>     Window width  (default: 720)\n"
                    "  -h, --height <N>     Window height (default: 720)\n"
-                   "  -d, --data   <path>  Path to game data directory (repo root)\n"
+                   "  -d, --data   <path>  Path to game data (dir containing Image/)\n"
+                   "\nData is resolved from the binary location:\n"
+                   "  <bindir>/../share/aircraftwar   (install layout)\n"
+                   "  <bindir>/.. or ../..             (dev build layout)\n"
                    "\nControls (keyboard):\n"
                    "  Arrow keys / WASD    Move\n"
                    "  Z / Space / Enter    Confirm\n"

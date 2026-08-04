@@ -19,6 +19,15 @@ static const int   MAX_BOMBS = 3;
 // ---------------------------------------------------------------------------
 
 bool Game::init(const std::string& dataPath, int screenW, int screenH, bool fullscreen) {
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#if defined(SDL_HINT_JOYSTICK_THREAD)
+    SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
+#endif
+    // Prefer raw HID reports as soon as they arrive
+#if defined(SDL_HINT_JOYSTICK_HIDAPI)
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI, "1");
+#endif
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) < 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
@@ -103,57 +112,105 @@ void Game::run() {
     Uint32 lastTick = SDL_GetTicks();
     while (m_running) {
         Uint32 frameStart = SDL_GetTicks();
-        float dt = (frameStart - lastTick) / 1000.0f;
+
+        // 1) Input first — then move with fresh pad state (minimizes press→motion lag)
+        processInput();
+
+        Uint32 now = SDL_GetTicks();
+        float dt = (now - lastTick) / 1000.0f;
         if (dt > 0.05f) dt = 0.05f;
         if (dt < 0.0f) dt = 0.0f;
-        lastTick = frameStart;
+        lastTick = now;
 
-        processInput();
         update(dt);
         render();
 
-        // Keep sampling axes during the frame wait to cut D-pad latency
+        // 2) Cap ~60fps while still polling pad and moving the player.
+        //    A single long SDL_Delay() would ignore D-Pad until it wakes.
         while (true) {
             Uint32 elapsed = SDL_GetTicks() - frameStart;
             if (elapsed >= 16) break;
+
             SDL_PumpEvents();
-            // Refresh axes only (do not reset edge flags mid-frame)
-            if (m_joystick) {
-                if (SDL_JoystickNumAxes(m_joystick) >= 2) {
-                    float ax = axisNorm(SDL_JoystickGetAxis(m_joystick, 0));
-                    float ay = axisNorm(SDL_JoystickGetAxis(m_joystick, 1));
-                    if (std::fabs(ax) > 0.7f) ax = (ax > 0) ? 1.0f : -1.0f;
-                    else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0;
-                    if (std::fabs(ay) > 0.7f) ay = (ay > 0) ? 1.0f : -1.0f;
-                    else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0;
-                    m_axisX = ax;
-                    m_axisY = ay;
-                }
-                if (SDL_JoystickNumHats(m_joystick) > 0) {
-                    Uint8 hat = SDL_JoystickGetHat(m_joystick, 0);
-                    if (hat & SDL_HAT_LEFT)  m_axisX = -1.0f;
-                    if (hat & SDL_HAT_RIGHT) m_axisX =  1.0f;
-                    if (hat & SDL_HAT_UP)    m_axisY = -1.0f;
-                    if (hat & SDL_HAT_DOWN)  m_axisY =  1.0f;
-                    if (hat == SDL_HAT_CENTERED &&
-                        std::fabs(m_axisX) < AXIS_DEADZONE &&
-                        std::fabs(m_axisY) < AXIS_DEADZONE) {
-                        /* keep axis values from sticks */
-                    }
-                }
-            } else if (m_controller) {
-                float ax = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTX));
-                float ay = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTY));
-                if (std::fabs(ax) > 0.7f) ax = (ax > 0) ? 1.0f : -1.0f;
-                else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0;
-                if (std::fabs(ay) > 0.7f) ay = (ay > 0) ? 1.0f : -1.0f;
-                else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0;
-                m_axisX = ax;
-                m_axisY = ay;
+            pollAxesOnly();
+
+            now = SDL_GetTicks();
+            float microDt = (now - lastTick) / 1000.0f;
+            if (microDt > 0.0f) {
+                if (microDt > 0.05f) microDt = 0.05f;
+                lastTick = now;
+                if (m_state == GameState::Playing)
+                    applyPlayerMovement(microDt);
             }
-            SDL_Delay(1);
+
+            // Sleep only if we still have comfortable headroom (Pi scheduler
+            // often turns Delay(1) into several ms).
+            elapsed = SDL_GetTicks() - frameStart;
+            if (elapsed < 12)
+                SDL_Delay(1);
         }
     }
+}
+
+void Game::pollAxesOnly() {
+    float ax = 0.0f, ay = 0.0f;
+    bool haveAxis = false;
+
+    if (m_joystick) {
+        if (SDL_JoystickNumAxes(m_joystick) >= 2) {
+            ax = axisNorm(SDL_JoystickGetAxis(m_joystick, 0));
+            ay = axisNorm(SDL_JoystickGetAxis(m_joystick, 1));
+            haveAxis = true;
+        }
+        if (SDL_JoystickNumHats(m_joystick) > 0) {
+            Uint8 hat = SDL_JoystickGetHat(m_joystick, 0);
+            if (hat & SDL_HAT_LEFT)  { ax = -1.0f; haveAxis = true; }
+            if (hat & SDL_HAT_RIGHT) { ax =  1.0f; haveAxis = true; }
+            if (hat & SDL_HAT_UP)    { ay = -1.0f; haveAxis = true; }
+            if (hat & SDL_HAT_DOWN)  { ay =  1.0f; haveAxis = true; }
+            if (hat == SDL_HAT_CENTERED && !haveAxis) {
+                ax = 0.0f;
+                ay = 0.0f;
+                haveAxis = true;
+            }
+        }
+    } else if (m_controller) {
+        ax = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTX));
+        ay = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTY));
+        haveAxis = true;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  ax = -1.0f;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) ax =  1.0f;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_UP))    ay = -1.0f;
+        if (SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN))  ay =  1.0f;
+    }
+
+    if (!haveAxis) return;
+
+    if (std::fabs(ax) > 0.55f) ax = (ax > 0.0f) ? 1.0f : -1.0f;
+    else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0.0f;
+    if (std::fabs(ay) > 0.55f) ay = (ay > 0.0f) ? 1.0f : -1.0f;
+    else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0.0f;
+
+    m_axisX = ax;
+    m_axisY = ay;
+
+    // Keep digital held flags in sync so menus/movement stay consistent
+    m_keyLeft  = m_kbLeft  || ax < -AXIS_DEADZONE;
+    m_keyRight = m_kbRight || ax >  AXIS_DEADZONE;
+    m_keyUp    = m_kbUp    || ay < -AXIS_DEADZONE;
+    m_keyDown  = m_kbDown  || ay >  AXIS_DEADZONE;
+}
+
+void Game::applyPlayerMovement(float dt) {
+    if (m_state != GameState::Playing) return;
+    if (!m_player.alive || m_player.exploding) return;
+
+    float dx = 0.0f, dy = 0.0f;
+    movementVector(dx, dy);
+    m_player.x += dx * m_player.speed * dt;
+    m_player.y += dy * m_player.speed * dt;
+    m_player.x = std::clamp(m_player.x, 0.0f, static_cast<float>(m_screenW - m_player.w));
+    m_player.y = std::clamp(m_player.y, 0.0f, static_cast<float>(m_screenH - m_player.h));
 }
 
 // ---------------------------------------------------------------------------
@@ -342,9 +399,9 @@ void Game::pollPadState() {
     }
 
     // Snap near-digital axes to ±1 for snappier D-pad feel (Leonardo)
-    if (std::fabs(ax) > 0.7f) ax = (ax > 0.0f) ? 1.0f : -1.0f;
+    if (std::fabs(ax) > 0.55f) ax = (ax > 0.0f) ? 1.0f : -1.0f;
     else if (std::fabs(ax) < AXIS_DEADZONE) ax = 0.0f;
-    if (std::fabs(ay) > 0.7f) ay = (ay > 0.0f) ? 1.0f : -1.0f;
+    if (std::fabs(ay) > 0.55f) ay = (ay > 0.0f) ? 1.0f : -1.0f;
     else if (std::fabs(ay) < AXIS_DEADZONE) ay = 0.0f;
 
     m_axisX = ax;
@@ -437,14 +494,14 @@ void Game::processInput() {
         if (e.type == SDL_CONTROLLERAXISMOTION && m_controller) {
             float v = axisNorm(e.caxis.value);
             if (std::fabs(v) < AXIS_DEADZONE) v = 0.0f;
-            else if (std::fabs(v) > 0.7f) v = (v > 0.0f) ? 1.0f : -1.0f;
+            else if (std::fabs(v) > 0.55f) v = (v > 0.0f) ? 1.0f : -1.0f;
             if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) m_axisX = v;
             if (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) m_axisY = v;
         }
         if (e.type == SDL_JOYAXISMOTION && m_joystick && e.jaxis.which == m_joystickId) {
             float v = axisNorm(e.jaxis.value);
             if (std::fabs(v) < AXIS_DEADZONE) v = 0.0f;
-            else if (std::fabs(v) > 0.7f) v = (v > 0.0f) ? 1.0f : -1.0f;
+            else if (std::fabs(v) > 0.55f) v = (v > 0.0f) ? 1.0f : -1.0f;
             if (e.jaxis.axis == 0) m_axisX = v;
             if (e.jaxis.axis == 1) m_axisY = v;
         }
@@ -584,13 +641,9 @@ void Game::updateSettings(float /*dt*/) {
 void Game::updatePlaying(float dt) {
     if (m_keyPausePressed) { pauseGame(); return; }
 
-    // Player movement (analog axes + keyboard, low-latency)
+    // Player movement
     if (m_player.alive && !m_player.exploding) {
-        float dx = 0, dy = 0;
-        movementVector(dx, dy);
-        m_player.x += dx * m_player.speed * dt;
-        m_player.y += dy * m_player.speed * dt;
-
+        applyPlayerMovement(dt);
         if (m_keyBombPressed) useBomb();
     }
 
@@ -696,7 +749,7 @@ void Game::startGame() {
     m_player.explodeTimer = 0;
     m_player.x = (m_screenW - m_player.w) / 2.0f;
     m_player.y = m_screenH - m_player.h - 20.0f;
-    m_player.speed = m_screenW * 1.35f;  // responsive D-pad on 720px screen
+    m_player.speed = m_screenW * 1.05f;
 
     upgradeGrade();
     m_res.playSound("game_music", -1);

@@ -55,7 +55,7 @@ private:
     SDL_GameController* m_controller = nullptr;
     SDL_Joystick* m_joystick = nullptr;
     SDL_JoystickID m_joystickId = -1;
-    static constexpr float AXIS_DEADZONE = 0.18f;
+    static constexpr float AXIS_DEADZONE = 0.12f;
     // Matte charcoal for UI text on light backgrounds (softer than pure black)
     static constexpr SDL_Color UI_MATTE{58, 58, 58, 255};
     static constexpr SDL_Color UI_MATTE_SELECTED{40, 40, 40, 255};
@@ -100,9 +100,12 @@ private:
     void openPreferredController();
     void closeController();
     void pollPadState();
+    void pollAxesOnly();
+    void applyPlayerMovement(float dt);
     void applyEdge(bool now, bool& held, bool& pressed);
     bool isPreferredController(int deviceIndex) const;
     static float axisNorm(Sint16 value);
+    void movementVector(float& outX, float& outY) const;
 
     // State updates
     void updatePlaying(float dt);
@@ -137,7 +140,6 @@ private:
     void drawTextureCentered(const std::string& name, int y, float scale);
     void drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY);
     void drawImageButton(const std::string& label, int y, bool selected, float btnScale = 1.0f);
-    void movementVector(float& outX, float& outY) const;
 
     // Helpers
     void initPlayerSize();
