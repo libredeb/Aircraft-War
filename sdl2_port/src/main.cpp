@@ -48,11 +48,17 @@ int main(int argc, char* argv[]) {
                    "  -w, --width  <N>     Window width  (default: 720)\n"
                    "  -h, --height <N>     Window height (default: 720)\n"
                    "  -d, --data   <path>  Path to game data directory\n"
-                   "\nControls:\n"
-                   "  Arrow keys / D-Pad   Move\n"
-                   "  Z / Space / A btn    Confirm / Shoot\n"
-                   "  X / Shift / B btn    Use Bomb\n"
-                   "  P / Esc / Start      Pause\n");
+                   "\nControls (keyboard):\n"
+                   "  Arrow keys / WASD    Move\n"
+                   "  Z / Space / Enter    Confirm\n"
+                   "  X / Shift            Use Bomb\n"
+                   "  P / Esc              Pause\n"
+                   "\nControls (gamepad - Arduino Leonardo preferred):\n"
+                   "  D-Pad / Left stick   Move\n"
+                   "  A                    Confirm\n"
+                   "  B / X / Y / L / R    Use Bomb\n"
+                   "  Start                Pause\n"
+                   "  Back                 Back / menu\n");
             return 0;
         }
     }

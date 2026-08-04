@@ -22,19 +22,36 @@ private:
     SDL_Window* m_window = nullptr;
     SDL_Renderer* m_renderer = nullptr;
     Resources m_res;
+    std::string m_dataPath;
     int m_screenW = 720, m_screenH = 720;
     float m_scale = 1.5f;
 
     GameState m_state = GameState::MainMenu;
     bool m_running = true;
 
-    // Input state
+    // Keyboard held state
+    bool m_kbUp = false, m_kbDown = false, m_kbLeft = false, m_kbRight = false;
+    bool m_kbConfirm = false, m_kbBomb = false, m_kbPause = false, m_kbBack = false;
+
+    // Combined held state (keyboard OR pad)
     bool m_keyUp = false, m_keyDown = false, m_keyLeft = false, m_keyRight = false;
     bool m_keyConfirm = false, m_keyBomb = false, m_keyPause = false, m_keyBack = false;
+
+    // Edge-triggered presses (one frame)
     bool m_keyConfirmPressed = false, m_keyBombPressed = false;
     bool m_keyPausePressed = false, m_keyBackPressed = false;
     bool m_keyUpPressed = false, m_keyDownPressed = false;
+    bool m_keyLeftPressed = false, m_keyRightPressed = false;
+
+    // Pad edge detection previous frame
+    bool m_padUp = false, m_padDown = false, m_padLeft = false, m_padRight = false;
+    bool m_padConfirm = false, m_padBomb = false, m_padPause = false, m_padBack = false;
+
+    // Controllers: prefer GameController API, fallback to raw Joystick
     SDL_GameController* m_controller = nullptr;
+    SDL_Joystick* m_joystick = nullptr;
+    SDL_JoystickID m_joystickId = -1;
+    static constexpr float AXIS_DEADZONE = 0.35f;
 
     // Game entities
     Player m_player;
@@ -70,6 +87,15 @@ private:
     void processInput();
     void update(float dt);
     void render();
+
+    // Input helpers
+    void loadControllerMappings();
+    void openPreferredController();
+    void closeController();
+    void pollPadState();
+    void applyEdge(bool now, bool& held, bool& pressed);
+    bool isPreferredController(int deviceIndex) const;
+    static float axisNorm(Sint16 value);
 
     // State updates
     void updatePlaying(float dt);
@@ -111,7 +137,7 @@ private:
     float enemyBaseSpeed(int type, int variant) const;
     float enemySpawnInterval(int type, int variant) const;
     void setSpawnIntervals();
-    void resetInput();
+    void resetEdgeInput();
     void removeDeadEntities();
     void loadSettings();
     void saveSettings();

@@ -19,10 +19,13 @@ static const int   MAX_BOMBS = 3;
 // ---------------------------------------------------------------------------
 
 bool Game::init(const std::string& dataPath, int screenW, int screenH, bool fullscreen) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) < 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) < 0) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
+    SDL_JoystickEventState(SDL_ENABLE);
+    SDL_GameControllerEventState(SDL_ENABLE);
+
     if (!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)) {
         fprintf(stderr, "IMG_Init failed: %s\n", IMG_GetError());
         return false;
@@ -37,6 +40,7 @@ bool Game::init(const std::string& dataPath, int screenW, int screenH, bool full
         return false;
     }
 
+    m_dataPath = dataPath;
     m_screenW = screenW;
     m_screenH = screenH;
     m_scale = m_screenW / 480.0f;
@@ -60,12 +64,8 @@ bool Game::init(const std::string& dataPath, int screenW, int screenH, bool full
 
     SDL_ShowCursor(SDL_DISABLE);
 
-    for (int i = 0; i < SDL_NumJoysticks(); i++) {
-        if (SDL_IsGameController(i)) {
-            m_controller = SDL_GameControllerOpen(i);
-            break;
-        }
-    }
+    loadControllerMappings();
+    openPreferredController();
 
     m_res.init(m_renderer, dataPath);
 
@@ -83,7 +83,7 @@ bool Game::init(const std::string& dataPath, int screenW, int screenH, bool full
 
 void Game::shutdown() {
     saveSettings();
-    if (m_controller) SDL_GameControllerClose(m_controller);
+    closeController();
     m_res.shutdown();
     if (m_renderer) SDL_DestroyRenderer(m_renderer);
     if (m_window) SDL_DestroyWindow(m_window);
@@ -115,17 +115,183 @@ void Game::run() {
 // Input
 // ---------------------------------------------------------------------------
 
-void Game::resetInput() {
+void Game::resetEdgeInput() {
     m_keyConfirmPressed = false;
     m_keyBombPressed = false;
     m_keyPausePressed = false;
     m_keyBackPressed = false;
     m_keyUpPressed = false;
     m_keyDownPressed = false;
+    m_keyLeftPressed = false;
+    m_keyRightPressed = false;
+}
+
+void Game::applyEdge(bool now, bool& held, bool& pressed) {
+    if (now && !held) pressed = true;
+    held = now;
+}
+
+float Game::axisNorm(Sint16 value) {
+    return value / 32767.0f;
+}
+
+void Game::loadControllerMappings() {
+    const std::string paths[] = {
+        m_dataPath + "/gamecontrollerdb.txt",
+        m_dataPath + "/data/gamecontrollerdb.txt",
+        "data/gamecontrollerdb.txt",
+        "../data/gamecontrollerdb.txt",
+        "sdl2_port/data/gamecontrollerdb.txt",
+    };
+    for (const auto& path : paths) {
+        int n = SDL_GameControllerAddMappingsFromFile(path.c_str());
+        if (n >= 0) {
+            fprintf(stderr, "Loaded %d gamecontroller mappings from %s\n", n, path.c_str());
+            return;
+        }
+    }
+    fprintf(stderr, "Warning: gamecontrollerdb.txt not found (using SDL built-in mappings)\n");
+}
+
+bool Game::isPreferredController(int deviceIndex) const {
+    const char* name = SDL_JoystickNameForIndex(deviceIndex);
+    if (!name) return false;
+    std::string n(name);
+    // Priority target: Arduino Leonardo (GamerCard)
+    if (n.find("Arduino Leonardo") != std::string::npos) return true;
+    if (n.find("Leonardo") != std::string::npos) return true;
+    // GUID match for Arduino Leonardo mapping
+    char guidStr[64];
+    SDL_JoystickGUID guid = SDL_JoystickGetDeviceGUID(deviceIndex);
+    SDL_JoystickGetGUIDString(guid, guidStr, sizeof(guidStr));
+    return std::string(guidStr).find("03000000412300003680000001010000") == 0;
+}
+
+void Game::closeController() {
+    if (m_controller) {
+        SDL_GameControllerClose(m_controller);
+        m_controller = nullptr;
+    }
+    if (m_joystick) {
+        SDL_JoystickClose(m_joystick);
+        m_joystick = nullptr;
+    }
+    m_joystickId = -1;
+    m_padUp = m_padDown = m_padLeft = m_padRight = false;
+    m_padConfirm = m_padBomb = m_padPause = m_padBack = false;
+}
+
+void Game::openPreferredController() {
+    closeController();
+
+    int preferred = -1;
+    int anyController = -1;
+    int anyJoystick = -1;
+
+    for (int i = 0; i < SDL_NumJoysticks(); i++) {
+        if (isPreferredController(i)) {
+            preferred = i;
+            break;
+        }
+        if (anyController < 0 && SDL_IsGameController(i)) anyController = i;
+        if (anyJoystick < 0) anyJoystick = i;
+    }
+
+    int idx = (preferred >= 0) ? preferred
+            : (anyController >= 0) ? anyController
+            : anyJoystick;
+
+    if (idx < 0) {
+        fprintf(stderr, "No joystick/gamepad connected\n");
+        return;
+    }
+
+    if (SDL_IsGameController(idx)) {
+        m_controller = SDL_GameControllerOpen(idx);
+        if (m_controller) {
+            m_joystickId = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(m_controller));
+            fprintf(stderr, "Opened game controller: %s\n", SDL_GameControllerName(m_controller));
+            return;
+        }
+    }
+
+    // Raw joystick fallback (e.g. unmapped Arduino until DB loads)
+    m_joystick = SDL_JoystickOpen(idx);
+    if (m_joystick) {
+        m_joystickId = SDL_JoystickInstanceID(m_joystick);
+        fprintf(stderr, "Opened raw joystick: %s (axes=%d buttons=%d)\n",
+                SDL_JoystickName(m_joystick),
+                SDL_JoystickNumAxes(m_joystick),
+                SDL_JoystickNumButtons(m_joystick));
+    }
+}
+
+void Game::pollPadState() {
+    bool up = false, down = false, left = false, right = false;
+    bool confirm = false, bomb = false, pause = false, back = false;
+
+    if (m_controller) {
+        up    = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_UP);
+        down  = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+        left  = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+        right = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+
+        // Analog / axis D-pad (Arduino Leonardo maps D-pad to leftx/lefty)
+        float ax = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTX));
+        float ay = axisNorm(SDL_GameControllerGetAxis(m_controller, SDL_CONTROLLER_AXIS_LEFTY));
+        if (ay < -AXIS_DEADZONE) up = true;
+        if (ay >  AXIS_DEADZONE) down = true;
+        if (ax < -AXIS_DEADZONE) left = true;
+        if (ax >  AXIS_DEADZONE) right = true;
+
+        confirm = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_A);
+        bomb = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_B)
+            || SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_X)
+            || SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_Y)
+            || SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)
+            || SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+        pause = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_START);
+        back  = SDL_GameControllerGetButton(m_controller, SDL_CONTROLLER_BUTTON_BACK);
+    } else if (m_joystick) {
+        // Leonardo-style raw fallback: axis0=X, axis1=Y, b0=A, b1=B, b10=Back, b11=Start, b5/b6=shoulders
+        if (SDL_JoystickNumAxes(m_joystick) >= 2) {
+            float ax = axisNorm(SDL_JoystickGetAxis(m_joystick, 0));
+            float ay = axisNorm(SDL_JoystickGetAxis(m_joystick, 1));
+            if (ay < -AXIS_DEADZONE) up = true;
+            if (ay >  AXIS_DEADZONE) down = true;
+            if (ax < -AXIS_DEADZONE) left = true;
+            if (ax >  AXIS_DEADZONE) right = true;
+        }
+        auto btn = [&](int b) {
+            return b < SDL_JoystickNumButtons(m_joystick) && SDL_JoystickGetButton(m_joystick, b);
+        };
+        confirm = btn(0);
+        bomb = btn(1) || btn(3) || btn(4) || btn(5) || btn(6);
+        back = btn(10);
+        pause = btn(11);
+    }
+
+    applyEdge(up, m_padUp, m_keyUpPressed);
+    applyEdge(down, m_padDown, m_keyDownPressed);
+    applyEdge(left, m_padLeft, m_keyLeftPressed);
+    applyEdge(right, m_padRight, m_keyRightPressed);
+    applyEdge(confirm, m_padConfirm, m_keyConfirmPressed);
+    applyEdge(bomb, m_padBomb, m_keyBombPressed);
+    applyEdge(pause, m_padPause, m_keyPausePressed);
+    applyEdge(back, m_padBack, m_keyBackPressed);
+
+    m_keyUp = m_kbUp || up;
+    m_keyDown = m_kbDown || down;
+    m_keyLeft = m_kbLeft || left;
+    m_keyRight = m_kbRight || right;
+    m_keyConfirm = m_kbConfirm || confirm;
+    m_keyBomb = m_kbBomb || bomb;
+    m_keyPause = m_kbPause || pause;
+    m_keyBack = m_kbBack || back;
 }
 
 void Game::processInput() {
-    resetInput();
+    resetEdgeInput();
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) { m_running = false; return; }
@@ -134,41 +300,56 @@ void Game::processInput() {
             bool down = (e.type == SDL_KEYDOWN);
             bool firstPress = down && !e.key.repeat;
             switch (e.key.keysym.sym) {
-            case SDLK_UP:    case SDLK_w: m_keyUp = down; if (firstPress) m_keyUpPressed = true; break;
-            case SDLK_DOWN:  case SDLK_s: m_keyDown = down; if (firstPress) m_keyDownPressed = true; break;
-            case SDLK_LEFT:  case SDLK_a: m_keyLeft = down; break;
-            case SDLK_RIGHT: case SDLK_d: m_keyRight = down; break;
-            case SDLK_RETURN: case SDLK_z: case SDLK_SPACE:
-                m_keyConfirm = down; if (firstPress) m_keyConfirmPressed = true; break;
-            case SDLK_x: case SDLK_LSHIFT:
-                m_keyBomb = down; if (firstPress) m_keyBombPressed = true; break;
+            case SDLK_UP:    case SDLK_w:
+            case SDLK_KP_8:
+                m_kbUp = down; if (firstPress) m_keyUpPressed = true; break;
+            case SDLK_DOWN:  case SDLK_s:
+            case SDLK_KP_2:
+                m_kbDown = down; if (firstPress) m_keyDownPressed = true; break;
+            case SDLK_LEFT:  case SDLK_a:
+            case SDLK_KP_4:
+                m_kbLeft = down; if (firstPress) m_keyLeftPressed = true; break;
+            case SDLK_RIGHT: case SDLK_d:
+            case SDLK_KP_6:
+                m_kbRight = down; if (firstPress) m_keyRightPressed = true; break;
+            case SDLK_RETURN: case SDLK_KP_ENTER:
+            case SDLK_z: case SDLK_SPACE: case SDLK_j:
+                m_kbConfirm = down; if (firstPress) m_keyConfirmPressed = true; break;
+            case SDLK_x: case SDLK_LSHIFT: case SDLK_RSHIFT: case SDLK_k:
+                m_kbBomb = down; if (firstPress) m_keyBombPressed = true; break;
             case SDLK_ESCAPE: case SDLK_p:
-                m_keyPause = down; if (firstPress) m_keyPausePressed = true; break;
-            case SDLK_BACKSPACE:
-                m_keyBack = down; if (firstPress) m_keyBackPressed = true; break;
+                m_kbPause = down; if (firstPress) m_keyPausePressed = true; break;
+            case SDLK_BACKSPACE: case SDLK_TAB:
+                m_kbBack = down; if (firstPress) m_keyBackPressed = true; break;
             default: break;
             }
         }
 
-        if (e.type == SDL_CONTROLLERBUTTONDOWN || e.type == SDL_CONTROLLERBUTTONUP) {
-            bool down = (e.type == SDL_CONTROLLERBUTTONDOWN);
-            switch (e.cbutton.button) {
-            case SDL_CONTROLLER_BUTTON_DPAD_UP:    m_keyUp = down; if (down) m_keyUpPressed = true; break;
-            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  m_keyDown = down; if (down) m_keyDownPressed = true; break;
-            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  m_keyLeft = down; break;
-            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: m_keyRight = down; break;
-            case SDL_CONTROLLER_BUTTON_A:
-                m_keyConfirm = down; if (down) m_keyConfirmPressed = true; break;
-            case SDL_CONTROLLER_BUTTON_B: case SDL_CONTROLLER_BUTTON_X:
-                m_keyBomb = down; if (down) m_keyBombPressed = true; break;
-            case SDL_CONTROLLER_BUTTON_START:
-                m_keyPause = down; if (down) m_keyPausePressed = true; break;
-            case SDL_CONTROLLER_BUTTON_BACK:
-                m_keyBack = down; if (down) m_keyBackPressed = true; break;
-            default: break;
+        if (e.type == SDL_CONTROLLERDEVICEADDED) {
+            fprintf(stderr, "Controller added (index %d)\n", e.cdevice.which);
+            if (!m_controller && !m_joystick) openPreferredController();
+            else if (!m_controller && isPreferredController(e.cdevice.which)) openPreferredController();
+        }
+        if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+            if (e.cdevice.which == m_joystickId) {
+                fprintf(stderr, "Controller removed\n");
+                closeController();
+                openPreferredController();
+            }
+        }
+        if (e.type == SDL_JOYDEVICEADDED) {
+            if (!m_controller && !m_joystick) openPreferredController();
+        }
+        if (e.type == SDL_JOYDEVICEREMOVED) {
+            if (e.jdevice.which == m_joystickId) {
+                fprintf(stderr, "Joystick removed\n");
+                closeController();
+                openPreferredController();
             }
         }
     }
+
+    pollPadState();
 }
 
 // ---------------------------------------------------------------------------
@@ -780,7 +961,7 @@ void Game::renderHUD() {
 
     // Button hint
     int hintSize = static_cast<int>(16 * m_scale / 1.5f);
-    const char* hint = "[Z] Confirm  [X] Bomb  [P] Pause";
+    const char* hint = "[Arrows] Move  [Z] Confirm  [X] Bomb  [P] Pause";
     if (m_state == GameState::Playing) {
         int tw, th;
         SDL_Texture* hintTex = m_res.renderText(hint, hintSize, {180, 180, 180, 150}, &tw, &th);
@@ -888,9 +1069,13 @@ void Game::renderAboutScreen() {
     y += titleSize + lineH;
     drawTextCentered("v2.2.0 - SDL2 Native Port", textSize, {200, 200, 200, 255}, y);
     y += lineH;
-    drawTextCentered("D-Pad: Move  |  A/Z: Confirm", textSize, {180, 180, 180, 255}, y);
+    drawTextCentered("D-Pad / Stick / Arrows: Move", textSize, {180, 180, 180, 255}, y);
     y += lineH;
-    drawTextCentered("B/X: Use Bomb  |  Start/P: Pause", textSize, {180, 180, 180, 255}, y);
+    drawTextCentered("A / Z / Space: Confirm", textSize, {180, 180, 180, 255}, y);
+    y += lineH;
+    drawTextCentered("B / X / Shoulder: Bomb", textSize, {180, 180, 180, 255}, y);
+    y += lineH;
+    drawTextCentered("Start / P / Esc: Pause", textSize, {180, 180, 180, 255}, y);
     y += lineH * 2;
     drawTextCentered("Based on Aircraft-War by zccrs", textSize, {150, 150, 150, 255}, y);
     y += lineH;

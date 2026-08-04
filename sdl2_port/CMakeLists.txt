@@ -37,3 +37,12 @@ install(TARGETS aircraftwar DESTINATION bin)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/../Image/" DESTINATION "${DATA_DIR}/Image")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/../sound/" DESTINATION "${DATA_DIR}/sound")
 install(FILES "${CMAKE_SOURCE_DIR}/../fzmw.ttf" DESTINATION "${DATA_DIR}")
+install(FILES "${CMAKE_SOURCE_DIR}/data/gamecontrollerdb.txt" DESTINATION "${DATA_DIR}")
+
+# Copy controller DB next to the binary for local runs from the build tree
+add_custom_command(TARGET aircraftwar POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:aircraftwar>/data"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/data/gamecontrollerdb.txt"
+        "$<TARGET_FILE_DIR:aircraftwar>/data/gamecontrollerdb.txt"
+)
