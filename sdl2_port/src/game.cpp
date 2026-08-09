@@ -619,14 +619,29 @@ void Game::updatePaused(float /*dt*/) {
 }
 
 void Game::updateGameOver(float /*dt*/) {
+    // Side-by-side: 0 = quit (left), 1 = play again (right)
     m_menuItemCount = 2;
-    if (m_keyUpPressed)   { m_menuSelection = (m_menuSelection - 1 + m_menuItemCount) % m_menuItemCount; m_res.playSound("button"); }
-    if (m_keyDownPressed) { m_menuSelection = (m_menuSelection + 1) % m_menuItemCount; m_res.playSound("button"); }
+    if (m_keyLeftPressed || m_keyUpPressed) {
+        m_menuSelection = (m_menuSelection - 1 + m_menuItemCount) % m_menuItemCount;
+        m_res.playSound("button");
+    }
+    if (m_keyRightPressed || m_keyDownPressed) {
+        m_menuSelection = (m_menuSelection + 1) % m_menuItemCount;
+        m_res.playSound("button");
+    }
     if (m_keyConfirmPressed) {
         m_res.playSound("button");
         switch (m_menuSelection) {
-        case 0: endGame(); startGame(); break;
-        case 1: endGame(); m_state = GameState::MainMenu; m_menuFocusSide = false; m_menuSelection = 0; break;
+        case 0:
+            endGame();
+            m_state = GameState::MainMenu;
+            m_menuFocusSide = false;
+            m_menuSelection = 0;
+            break;
+        case 1:
+            endGame();
+            startGame();
+            break;
         }
     }
 }
@@ -692,7 +707,7 @@ void Game::updatePlaying(float dt) {
     if (!m_player.alive) {
         submitScore(m_score);
         m_state = GameState::GameOver;
-        m_menuSelection = 0;
+        m_menuSelection = 1; // default: play again (right)
         m_res.stopSound("game_music");
         return;
     }
@@ -1404,7 +1419,7 @@ void Game::renderMainMenu() {
     bool startFocused = !m_menuFocusSide;
     float startScale = m_scale * (startFocused ? 1.08f : 0.98f);
     int startY = m_screenH * 48 / 100;
-    drawImageButton("start game", startY, startFocused, startScale, true, "button_3");
+    drawImageButton("Start Game", startY, startFocused, startScale, true, "button_3");
 
     // Side icons anchored to bottom-right
     static const char* kSideTex[3] = { "Button_rank", "Button_setting", "Button_info" };
@@ -1446,21 +1461,97 @@ void Game::renderPauseMenu() {
 }
 
 void Game::renderGameOverScreen() {
-    SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 160);
-    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
-    SDL_Rect overlay = { 0, 0, m_screenW, m_screenH };
-    SDL_RenderFillRect(m_renderer, &overlay);
+    // Score panel (button_1) — three bands: title / score / actions
+    float panelScale = m_scale * 0.95f;
+    int pw = 0, ph = 0;
+    m_res.texSizeScaled("button_1", panelScale, &pw, &ph);
+    if (pw <= 0) {
+        pw = static_cast<int>(m_screenW * 0.72f);
+        ph = static_cast<int>(pw * 295.0f / 395.0f);
+    }
 
-    int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("Game Over", titleSize, {210, 210, 210, 255}, m_screenH / 6, true);
+    int px = (m_screenW - pw) / 2;
+    int py = (m_screenH - ph) / 2;
 
-    char scoreBuf[64];
-    snprintf(scoreBuf, sizeof(scoreBuf), "Score: %d", m_score);
-    int scoreSize = static_cast<int>(32 * m_scale / 1.5f);
-    drawTextCentered(scoreBuf, scoreSize, {210, 210, 210, 255}, m_screenH / 6 + titleSize + 16, true);
+    SDL_Texture* panel = m_res.tex("button_1");
+    if (panel) {
+        SDL_Rect dst = { px, py, pw, ph };
+        SDL_RenderCopy(m_renderer, panel, nullptr, &dst);
+    } else {
+        SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(m_renderer, 210, 210, 210, 240);
+        SDL_Rect dst = { px, py, pw, ph };
+        SDL_RenderFillRect(m_renderer, &dst);
+        SDL_SetRenderDrawColor(m_renderer, 60, 60, 60, 255);
+        SDL_RenderDrawRect(m_renderer, &dst);
+    }
 
-    std::vector<std::string> items = { "Play Again", "Quit" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 48 / 100);
+    // Top band (~1/7): title
+    int titleSize = static_cast<int>(28 * m_scale / 1.5f);
+    int titleTw = 0, titleTh = 0;
+    SDL_Texture* titleTex = m_res.renderText("aircraft war score", titleSize, UI_MATTE,
+                                            &titleTw, &titleTh, true);
+    if (titleTex) {
+        SDL_Rect td = { px + (pw - titleTw) / 2,
+                        py + ph / 7 - titleTh / 2,
+                        titleTw, titleTh };
+        SDL_RenderCopy(m_renderer, titleTex, nullptr, &td);
+        SDL_DestroyTexture(titleTex);
+    }
+
+    // Middle: large score
+    char scoreBuf[32];
+    if (m_score <= 0)
+        snprintf(scoreBuf, sizeof(scoreBuf), "0000");
+    else
+        snprintf(scoreBuf, sizeof(scoreBuf), "%d", m_score);
+    int scoreSize = static_cast<int>(48 * m_scale / 1.5f);
+    int sw = 0, sh = 0;
+    SDL_Texture* scoreTex = m_res.renderText(scoreBuf, scoreSize, UI_MATTE, &sw, &sh, true);
+    if (scoreTex) {
+        SDL_Rect sd = { px + (pw - sw) / 2, py + (ph - sh) / 2, sw, sh };
+        SDL_RenderCopy(m_renderer, scoreTex, nullptr, &sd);
+        SDL_DestroyTexture(scoreTex);
+    }
+
+    // Bottom band (~6/7): quit | play again side by side (button_2 pills)
+    float btnScale = m_scale * 0.72f;
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled("button_2_1", btnScale, &bw, &bh);
+    if (bw <= 0) {
+        bw = static_cast<int>(pw * 0.38f);
+        bh = static_cast<int>(40 * m_scale / 1.5f);
+    }
+
+    int btnY = py + (6 * ph) / 7 - bh / 2;
+    int leftX = px + pw / 4 - bw / 2;
+    int rightX = px + (3 * pw) / 4 - bw / 2;
+
+    auto drawPanelBtn = [&](const char* label, int x, bool selected) {
+        const char* texName = selected ? "button_2_2" : "button_2_1";
+        SDL_Rect dst = { x, btnY, bw, bh };
+        SDL_Texture* btn = m_res.tex(texName);
+        if (btn) {
+            SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
+        } else {
+            SDL_SetRenderDrawColor(m_renderer, selected ? 190 : 220, selected ? 190 : 220,
+                                   selected ? 190 : 220, 255);
+            SDL_RenderFillRect(m_renderer, &dst);
+            SDL_SetRenderDrawColor(m_renderer, 60, 60, 60, 255);
+            SDL_RenderDrawRect(m_renderer, &dst);
+        }
+        int fs = static_cast<int>(22 * m_scale / 1.5f);
+        int tw = 0, th = 0;
+        SDL_Texture* t = m_res.renderText(label, fs, UI_MATTE, &tw, &th, true);
+        if (t) {
+            SDL_Rect td = { x + (bw - tw) / 2, btnY + (bh - th) / 2, tw, th };
+            SDL_RenderCopy(m_renderer, t, nullptr, &td);
+            SDL_DestroyTexture(t);
+        }
+    };
+
+    drawPanelBtn("quit", leftX, m_menuSelection == 0);
+    drawPanelBtn("play again", rightX, m_menuSelection == 1);
 }
 
 void Game::renderSettingsMenu() {
