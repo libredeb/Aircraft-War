@@ -1514,8 +1514,8 @@ void Game::renderGameOverScreen() {
         SDL_DestroyTexture(scoreTex);
     }
 
-    // Bottom band (~6/7): quit | play again side by side (button_2 pills)
-    float btnScale = m_scale * 0.72f;
+    // Bottom band (~6/7): quit | play again — pill assets, no square outline
+    float btnScale = m_scale * 0.78f;
     int bw = 0, bh = 0;
     m_res.texSizeScaled("button_2_1", btnScale, &bw, &bh);
     if (bw <= 0) {
@@ -1528,12 +1528,17 @@ void Game::renderGameOverScreen() {
     int rightX = px + (3 * pw) / 4 - bw / 2;
 
     auto drawPanelBtn = [&](const char* label, int x, bool selected) {
-        // No button PNG / no square outline — text sits on the white panel.
-        // Focus = larger, darker label (pill asset is gray and would clash).
-        int fs = static_cast<int>((22 * 1.15f * 1.20f) * m_scale / 1.5f);
+        // button_2_* is already a rounded pill — never draw SDL rects on top
+        const char* texName = selected ? "button_2_2" : "button_2_1";
+        SDL_Texture* btn = m_res.tex(texName);
+        if (btn) {
+            SDL_Rect dst = { x, btnY, bw, bh };
+            SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
+        }
+
+        int fs = static_cast<int>(28 * m_scale / 1.5f); // ~20%+ larger labels
         int tw = 0, th = 0;
-        SDL_Color col = selected ? UI_MATTE_SELECTED : UI_MATTE;
-        SDL_Texture* t = m_res.renderText(label, fs, col, &tw, &th, true);
+        SDL_Texture* t = m_res.renderText(label, fs, UI_MATTE, &tw, &th, true);
         if (t) {
             SDL_Rect td = { x + (bw - tw) / 2, btnY + (bh - th) / 2, tw, th };
             SDL_RenderCopy(m_renderer, t, nullptr, &td);
