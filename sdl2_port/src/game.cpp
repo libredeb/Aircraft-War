@@ -1239,10 +1239,11 @@ void Game::drawDottedLine(int y, int marginX) {
         marginX = static_cast<int>(36 * m_scale / 1.5f);
     int x0 = marginX;
     int x1 = m_screenW - marginX;
-    int dash = std::max(3, static_cast<int>(6 * m_scale / 1.5f));
-    int gap = std::max(2, static_cast<int>(4 * m_scale / 1.5f));
-    int thickness = std::max(2, static_cast<int>(3 * m_scale / 1.5f));
-    SDL_SetRenderDrawColor(m_renderer, UI_MATTE.r, UI_MATTE.g, UI_MATTE.b, 255);
+    int dash = std::max(4, static_cast<int>(7 * m_scale / 1.5f));
+    int gap = std::max(3, static_cast<int>(5 * m_scale / 1.5f));
+    // Thick charcoal dashes (reference Setting: header divider)
+    int thickness = std::max(5, static_cast<int>(7 * m_scale / 1.5f));
+    SDL_SetRenderDrawColor(m_renderer, 40, 40, 40, 255);
     for (int x = x0; x < x1; x += dash + gap) {
         int w = std::min(dash, x1 - x);
         SDL_Rect r = { x, y, w, thickness };
@@ -1274,7 +1275,7 @@ void Game::drawBackButton(bool selected) {
 }
 
 void Game::drawSideIcon(const char* texName, int cx, int cy, float iconScale, bool focused) {
-    float sc = iconScale * (focused ? 1.18f : 1.0f);
+    float sc = iconScale * (focused ? 1.12f : 1.0f);
     int iw = 0, ih = 0;
     m_res.texSizeScaled(texName, sc, &iw, &ih);
     if (iw <= 0) {
@@ -1292,7 +1293,7 @@ void Game::drawSideIcon(const char* texName, int cx, int cy, float iconScale, bo
 }
 
 void Game::drawExitIcon(int cx, int cy, float iconScale, bool focused) {
-    float sc = iconScale * (focused ? 1.18f : 1.0f);
+    float sc = iconScale * (focused ? 1.12f : 1.0f);
     int size = static_cast<int>(56 * sc);
     SDL_Rect dst = { cx - size / 2, cy - size / 2, size, size };
 
@@ -1312,7 +1313,7 @@ void Game::drawExitIcon(int cx, int cy, float iconScale, bool focused) {
 }
 
 void Game::drawTooltip(const std::string& label, int rightX, int centerY) {
-    int fontSize = static_cast<int>(22 * m_scale / 1.5f);
+    int fontSize = static_cast<int>(26 * m_scale / 1.5f);
     int tw = 0, th = 0;
     SDL_Texture* text = m_res.renderText(label, fontSize, UI_TOOLTIP_FG, &tw, &th, true);
     if (!text) return;
@@ -1342,10 +1343,7 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
                            bool bold, const char* texBase) {
     const char* onName = "button_2_2";
     const char* offName = "button_2_1";
-    if (texBase && std::string(texBase) == "button_1") {
-        onName = "button_1";
-        offName = "button_1";
-    } else if (texBase && std::string(texBase) == "button_3") {
+    if (texBase && std::string(texBase) == "button_3") {
         onName = selected ? "button_3_2" : "button_3_1";
         offName = onName;
     }
@@ -1355,7 +1353,7 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
 
     if (bw <= 0) {
         bw = static_cast<int>(m_screenW * 0.55f);
-        bh = static_cast<int>(56 * m_scale / 1.5f);
+        bh = static_cast<int>(44 * m_scale / 1.5f);
     }
 
     SDL_Rect dst = { (m_screenW - bw) / 2, y, bw, bh };
@@ -1371,9 +1369,10 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
         SDL_RenderDrawRect(m_renderer, &dst);
     }
 
-    int fontSize = static_cast<int>(28 * m_scale / 1.5f);
-    if (texBase && std::string(texBase) == "button_1")
-        fontSize = static_cast<int>(32 * m_scale / 1.5f);
+    // Fit label to thin pills (button_3 is shorter)
+    int fontSize = static_cast<int>(26 * m_scale / 1.5f);
+    if (texBase && std::string(texBase) == "button_3")
+        fontSize = static_cast<int>(24 * m_scale / 1.5f);
     int tw = 0, th = 0;
     SDL_Color color = selected ? UI_MATTE_SELECTED : UI_MATTE;
     SDL_Texture* text = m_res.renderText(label, fontSize, color, &tw, &th, bold);
@@ -1384,40 +1383,44 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
     }
 }
 
-void Game::drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY) {
-    float btnScale = m_scale * 0.95f;
+void Game::drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY,
+                         const char* texBase, float scaleMul) {
+    float btnScale = m_scale * scaleMul;
+    const char* measure = (texBase && std::string(texBase) == "button_3") ? "button_3_1" : "button_2_1";
     int bw = 0, bh = 0;
-    m_res.texSizeScaled("button_2_1", btnScale, &bw, &bh);
-    int spacing = bh > 0 ? bh + static_cast<int>(18 * m_scale / 1.5f)
-                         : static_cast<int>(60 * m_scale / 1.5f);
+    m_res.texSizeScaled(measure, btnScale, &bw, &bh);
+    int spacing = bh > 0 ? bh + static_cast<int>(14 * m_scale / 1.5f)
+                         : static_cast<int>(52 * m_scale / 1.5f);
 
     for (int i = 0; i < static_cast<int>(items.size()); i++) {
-        drawImageButton(items[i], startY + i * spacing, i == selectedIdx, btnScale, true);
+        drawImageButton(items[i], startY + i * spacing, i == selectedIdx, btnScale, true, texBase);
     }
 }
 
 void Game::renderMainMenu() {
     drawTextureCentered("LOGO", m_screenH / 6, m_scale);
 
-    // Unique Start Game CTA — larger button_1, bold label, default focus
+    // Unique CTA: thin pill (not button_1 panel), lowercase, slightly larger when focused
     bool startFocused = !m_menuFocusSide;
-    float startScale = m_scale * (startFocused ? 1.12f : 1.0f);
-    int startY = m_screenH * 52 / 100;
-    drawImageButton("Start Game", startY, startFocused, startScale, true, "button_1");
+    float startScale = m_scale * (startFocused ? 1.08f : 0.98f);
+    int startY = m_screenH * 48 / 100;
+    drawImageButton("start game", startY, startFocused, startScale, true, "button_3");
 
-    // Side icons: Rank, Settings, Info, Exit
+    // Side icons anchored to bottom-right
     static const char* kSideTex[3] = { "Button_rank", "Button_setting", "Button_info" };
     static const char* kSideTip[4] = { "Leaderboard", "Settings", "Info", "Exit" };
 
-    int marginR = static_cast<int>(36 * m_scale / 1.5f);
+    int marginR = static_cast<int>(28 * m_scale / 1.5f);
+    int marginB = static_cast<int>(28 * m_scale / 1.5f);
     int iconBase = static_cast<int>(52 * m_scale / 1.5f);
     float iconScale = m_scale * 0.72f;
     int cx = m_screenW - marginR - iconBase / 2;
-    int topY = m_screenH * 28 / 100;
-    int gap = static_cast<int>(iconBase * 1.35f);
+    int gap = static_cast<int>(iconBase * 1.28f);
+    // Last icon sits near bottom; stack upward
+    int bottomCy = m_screenH - marginB - iconBase / 2;
 
     for (int i = 0; i < SIDE_ICON_COUNT; i++) {
-        int cy = topY + i * gap;
+        int cy = bottomCy - (SIDE_ICON_COUNT - 1 - i) * gap;
         bool focused = m_menuFocusSide && m_sideIcon == i;
         if (i < 3)
             drawSideIcon(kSideTex[i], cx, cy, iconScale, focused);
@@ -1437,8 +1440,9 @@ void Game::renderPauseMenu() {
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
     drawTextCentered("PAUSED", titleSize, {210, 210, 210, 255}, m_screenH / 5, true);
 
+    // Thin pills + all-lowercase labels (reference pause menu)
     std::vector<std::string> items = { "continue", "restart", "quit" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 38 / 100);
+    drawMenuItems(items, m_menuSelection, m_screenH * 38 / 100, "button_3", 0.88f);
 }
 
 void Game::renderGameOverScreen() {
@@ -1461,7 +1465,7 @@ void Game::renderGameOverScreen() {
 
 void Game::renderSettingsMenu() {
     int margin = static_cast<int>(40 * m_scale / 1.5f);
-    int titleSize = static_cast<int>(40 * m_scale / 1.5f);
+    int titleSize = static_cast<int>(56 * m_scale / 1.5f);  // ~40% larger than base 40
     int rowSize = static_cast<int>(30 * m_scale / 1.5f);
     int y = m_screenH / 8;
 
@@ -1510,7 +1514,7 @@ void Game::renderSettingsMenu() {
 
 void Game::renderAboutScreen() {
     int margin = static_cast<int>(40 * m_scale / 1.5f);
-    int titleSize = static_cast<int>(40 * m_scale / 1.5f);
+    int titleSize = static_cast<int>(56 * m_scale / 1.5f);
     int textSize = static_cast<int>(22 * m_scale / 1.5f);
     int y = m_screenH / 8;
 
@@ -1519,12 +1523,15 @@ void Game::renderAboutScreen() {
     drawDottedLine(y);
     y += static_cast<int>(28 * m_scale / 1.5f);
 
+    int nameSize = static_cast<int>(textSize * 1.15f);
+    drawTextCentered("Aircraft War", nameSize, UI_MATTE, y, true);
+    y += static_cast<int>(36 * m_scale / 1.5f);
+
     auto line = [&](const std::string& s, SDL_Color c) {
         drawTextCentered(s, textSize, c, y, false);
         y += static_cast<int>(32 * m_scale / 1.5f);
     };
 
-    line("Aircraft War", UI_MATTE);
     line("v2.2.0 - SDL2 Native Port", {90, 90, 90, 255});
     line("D-Pad / Stick / Arrows: Move", {100, 100, 100, 255});
     line("A / Z / Space: Confirm", {100, 100, 100, 255});
@@ -1541,30 +1548,11 @@ void Game::renderAboutScreen() {
 
 void Game::renderRankScreen() {
     int margin = static_cast<int>(40 * m_scale / 1.5f);
-    int titleSize = static_cast<int>(40 * m_scale / 1.5f);
+    int titleSize = static_cast<int>(56 * m_scale / 1.5f);
     int textSize = static_cast<int>(24 * m_scale / 1.5f);
     int y = m_screenH / 8;
 
     drawTextLeft("Rank:", titleSize, UI_MATTE, margin, y, true);
-
-    char totalBuf[64];
-    snprintf(totalBuf, sizeof(totalBuf), "total people: %d",
-             static_cast<int>(m_ranks.size()));
-    int subSize = static_cast<int>(22 * m_scale / 1.5f);
-    int titleW = 0, titleH = 0;
-    SDL_Texture* titleMeasure = m_res.renderText("Rank:", titleSize, UI_MATTE, &titleW, &titleH, true);
-    if (titleMeasure) SDL_DestroyTexture(titleMeasure);
-    int tw = 0, th = 0;
-    SDL_Texture* sub = m_res.renderText(totalBuf, subSize, {100, 100, 100, 255}, &tw, &th, false);
-    if (sub) {
-        SDL_Rect dst = {
-            margin + titleW + static_cast<int>(16 * m_scale / 1.5f),
-            y + (titleSize - th) / 2,
-            tw, th
-        };
-        SDL_RenderCopy(m_renderer, sub, nullptr, &dst);
-        SDL_DestroyTexture(sub);
-    }
 
     y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
     drawDottedLine(y);
@@ -1576,7 +1564,7 @@ void Game::renderRankScreen() {
         drawTextCentered("No scores yet", textSize, {120, 120, 120, 255}, y + rowH, false);
     }
     for (int i = 0; i < maxRows; i++) {
-        char rankBuf[8];
+        char rankBuf[16];
         snprintf(rankBuf, sizeof(rankBuf), "%d", i + 1);
         drawTextLeft(rankBuf, textSize, UI_MATTE, margin, y, true);
 

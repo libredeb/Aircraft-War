@@ -157,7 +157,8 @@ private:
     void drawTextLeft(const std::string& text, int fontSize, SDL_Color color, int x, int y,
                       bool bold = false);
     void drawTextureCentered(const std::string& name, int y, float scale);
-    void drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY);
+    void drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY,
+                       const char* texBase = nullptr, float scaleMul = 0.95f);
     void drawImageButton(const std::string& label, int y, bool selected, float btnScale = 1.0f,
                          bool bold = false, const char* texBase = nullptr);
     void drawDottedLine(int y, int marginX = -1);
