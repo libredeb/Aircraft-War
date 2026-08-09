@@ -1249,35 +1249,45 @@ void Game::drawTextureCentered(const std::string& name, int y, float texScale) {
     SDL_RenderCopy(m_renderer, t, nullptr, &dst);
 }
 
-void Game::drawDottedLine(int y, int marginX) {
-    if (marginX < 0)
-        marginX = static_cast<int>(36 * m_scale / 1.5f);
-    int x0 = marginX;
-    int x1 = m_screenW - marginX;
-    // Long dashes (em-dash style) instead of short dots
-    int dash = std::max(22, static_cast<int>(32 * m_scale / 1.5f));
-    int gap = std::max(8, static_cast<int>(12 * m_scale / 1.5f));
-    int thickness = std::max(5, static_cast<int>(7 * m_scale / 1.5f));
-    SDL_SetRenderDrawColor(m_renderer, 40, 40, 40, 255);
-    for (int x = x0; x < x1; x += dash + gap) {
-        int w = std::min(dash, x1 - x);
-        SDL_Rect r = { x, y, w, thickness };
-        SDL_RenderFillRect(m_renderer, &r);
+int Game::drawBanner(const char* name, int y, bool fromBottom) {
+    float sc = m_scale;
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled(name, sc, &bw, &bh);
+    if (bw <= 0 || bh <= 0)
+        return 0;
+    if (bw > m_screenW) {
+        float fit = static_cast<float>(m_screenW) / static_cast<float>(bw);
+        bw = m_screenW;
+        bh = static_cast<int>(bh * fit);
     }
+    int dy = fromBottom ? (m_screenH - bh) : y;
+    SDL_Texture* t = m_res.tex(name);
+    if (t) {
+        SDL_Rect dst = { (m_screenW - bw) / 2, dy, bw, bh };
+        SDL_RenderCopy(m_renderer, t, nullptr, &dst);
+    }
+    return bh;
 }
 
 void Game::drawBackButton(bool selected) {
     int margin = static_cast<int>(28 * m_scale / 1.5f);
-    float sc = m_scale * (selected ? 0.95f : 0.85f);
+    float sc = m_scale * 0.85f;
+    const char* texName = selected ? "Button_back_2" : "Button_back";
     int bw = 0, bh = 0;
-    m_res.texSizeScaled("Button_back", sc, &bw, &bh);
+    m_res.texSizeScaled(texName, sc, &bw, &bh);
+    if (bw <= 0) {
+        // Prefer idle size for layout if focused asset is missing
+        m_res.texSizeScaled("Button_back", sc, &bw, &bh);
+    }
     if (bw <= 0) {
         bw = static_cast<int>(48 * m_scale / 1.5f);
         bh = bw;
     }
     int x = margin;
     int y = m_screenH - bh - margin;
-    SDL_Texture* t = m_res.tex("Button_back");
+    SDL_Texture* t = m_res.tex(texName);
+    if (!t && selected)
+        t = m_res.tex("Button_back");
     if (t) {
         SDL_Rect dst = { x, y, bw, bh };
         SDL_RenderCopy(m_renderer, t, nullptr, &dst);
@@ -1290,7 +1300,7 @@ void Game::drawBackButton(bool selected) {
 }
 
 void Game::drawSideIcon(const char* texName, int cx, int cy, float iconScale, bool focused) {
-    float sc = iconScale * (focused ? 1.12f : 1.0f);
+    float sc = iconScale * (focused ? 1.30f : 1.0f);
     int iw = 0, ih = 0;
     m_res.texSizeScaled(texName, sc, &iw, &ih);
     if (iw <= 0) {
@@ -1308,7 +1318,7 @@ void Game::drawSideIcon(const char* texName, int cx, int cy, float iconScale, bo
 }
 
 void Game::drawExitIcon(int cx, int cy, float iconScale, bool focused) {
-    float sc = iconScale * (focused ? 1.12f : 1.0f);
+    float sc = iconScale * (focused ? 1.30f : 1.0f);
     int size = static_cast<int>(78 * sc);
     SDL_Rect dst = { cx - size / 2, cy - size / 2, size, size };
 
@@ -1385,14 +1395,19 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
     }
 
     // Fit label to thin pills (button_3 is shorter)
+    const bool isPill3 = texBase && std::string(texBase) == "button_3";
     int fontSize = static_cast<int>(26 * m_scale / 1.5f);
-    if (texBase && std::string(texBase) == "button_3")
+    if (isPill3)
         fontSize = static_cast<int>(24 * m_scale / 1.5f);
     int tw = 0, th = 0;
-    SDL_Color color = selected ? UI_MATTE_SELECTED : UI_MATTE;
+    // Dark focused pill needs light text; unfocused keeps matte charcoal
+    SDL_Color color = selected ? UI_FOCUS_LIGHT : UI_MATTE;
     SDL_Texture* text = m_res.renderText(label, fontSize, color, &tw, &th, bold);
     if (text) {
-        SDL_Rect td = { dst.x + (bw - tw) / 2, dst.y + (bh - th) / 2, tw, th };
+        // Vertically stretch pill labels so they feel taller in the thin asset
+        float vStretch = isPill3 ? 1.32f : 1.0f;
+        int drawH = static_cast<int>(th * vStretch);
+        SDL_Rect td = { dst.x + (bw - tw) / 2, dst.y + (bh - drawH) / 2, tw, drawH };
         SDL_RenderCopy(m_renderer, text, nullptr, &td);
         SDL_DestroyTexture(text);
     }
@@ -1427,8 +1442,9 @@ void Game::renderMainMenu() {
 
     int marginR = static_cast<int>(24 * m_scale / 1.5f);
     int marginB = static_cast<int>(24 * m_scale / 1.5f);
-    int iconBase = static_cast<int>(76 * m_scale / 1.5f);
-    float iconScale = m_scale * 1.05f;
+    // ~15% smaller idle size so the focus pop reads more clearly
+    int iconBase = static_cast<int>(76 * m_scale / 1.5f * 0.85f);
+    float iconScale = m_scale * 1.05f * 0.85f;
     int cx = m_screenW - marginR - iconBase / 2;
     int gap = static_cast<int>(iconBase * 1.22f);
     // Last icon sits near bottom; stack upward
@@ -1538,7 +1554,8 @@ void Game::renderGameOverScreen() {
 
         int fs = static_cast<int>(28 * m_scale / 1.5f); // ~20%+ larger labels
         int tw = 0, th = 0;
-        SDL_Texture* t = m_res.renderText(label, fs, UI_MATTE, &tw, &th, true);
+        SDL_Color color = selected ? UI_FOCUS_LIGHT : UI_MATTE;
+        SDL_Texture* t = m_res.renderText(label, fs, color, &tw, &th, true);
         if (t) {
             SDL_Rect td = { x + (bw - tw) / 2, btnY + (bh - th) / 2, tw, th };
             SDL_RenderCopy(m_renderer, t, nullptr, &td);
@@ -1552,14 +1569,9 @@ void Game::renderGameOverScreen() {
 
 void Game::renderSettingsMenu() {
     int margin = static_cast<int>(40 * m_scale / 1.5f);
-    int titleSize = static_cast<int>(56 * m_scale / 1.5f);  // ~40% larger than base 40
     int rowSize = static_cast<int>(34 * m_scale / 1.5f);
-    int y = m_screenH / 8;
-
-    drawTextLeft("Setting:", titleSize, UI_MATTE, margin, y, true);
-    y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
-    drawDottedLine(y);
-    y += static_cast<int>(36 * m_scale / 1.5f);
+    int headerH = drawBanner("Setting_01", 0, false);
+    int y = headerH + static_cast<int>(20 * m_scale / 1.5f);
 
     struct Row { const char* label; bool on; };
     Row rows[2] = {
@@ -1598,21 +1610,14 @@ void Game::renderSettingsMenu() {
         y += rowH;
     }
 
-    y += static_cast<int>(8 * m_scale / 1.5f);
-    drawDottedLine(y);
+    drawBanner("Setting_02", 0, true);
     drawBackButton(m_menuSelection == 2);
 }
 
 void Game::renderAboutScreen() {
-    int margin = static_cast<int>(40 * m_scale / 1.5f);
-    int titleSize = static_cast<int>(56 * m_scale / 1.5f);
     int textSize = static_cast<int>(22 * m_scale / 1.5f);
-    int y = m_screenH / 8;
-
-    drawTextLeft("Info:", titleSize, UI_MATTE, margin, y, true);
-    y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
-    drawDottedLine(y);
-    y += static_cast<int>(28 * m_scale / 1.5f);
+    int headerH = drawBanner("About_01", 0, false);
+    int y = headerH + static_cast<int>(20 * m_scale / 1.5f);
 
     int nameSize = static_cast<int>(textSize * 1.15f);
     drawTextCentered("Aircraft War", nameSize, UI_MATTE, y, true);
@@ -1632,22 +1637,15 @@ void Game::renderAboutScreen() {
     line("Based on Aircraft-War by zccrs", {120, 120, 120, 255});
     line("SDL2 port for Linux / RPi", {120, 120, 120, 255});
 
-    y += static_cast<int>(8 * m_scale / 1.5f);
-    drawDottedLine(y);
+    drawBanner("About_02", 0, true);
     drawBackButton(true);
 }
 
 void Game::renderRankScreen() {
     int margin = static_cast<int>(40 * m_scale / 1.5f);
-    int titleSize = static_cast<int>(56 * m_scale / 1.5f);
     int textSize = static_cast<int>(24 * m_scale / 1.5f);
-    int y = m_screenH / 8;
-
-    drawTextLeft("Rank:", titleSize, UI_MATTE, margin, y, true);
-
-    y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
-    drawDottedLine(y);
-    y += static_cast<int>(24 * m_scale / 1.5f);
+    int headerH = drawBanner("Rank_01", 0, false);
+    int y = headerH + static_cast<int>(20 * m_scale / 1.5f);
 
     int rowH = static_cast<int>(40 * m_scale / 1.5f);
     int maxRows = std::min(static_cast<int>(m_ranks.size()), MAX_RANKS);
@@ -1674,8 +1672,7 @@ void Game::renderRankScreen() {
         y += rowH;
     }
 
-    y = m_screenH - static_cast<int>(100 * m_scale / 1.5f);
-    drawDottedLine(y);
+    drawBanner("Setting_02", 0, true);
     drawBackButton(true);
 }
 

@@ -64,6 +64,8 @@ private:
     // Matte charcoal for UI text on light backgrounds (softer than pure black)
     static constexpr SDL_Color UI_MATTE{58, 58, 58, 255};
     static constexpr SDL_Color UI_MATTE_SELECTED{40, 40, 40, 255};
+    // Light gray for labels on dark focused button assets
+    static constexpr SDL_Color UI_FOCUS_LIGHT{210, 210, 210, 255};
     static constexpr SDL_Color UI_TOOLTIP_BG{55, 55, 55, 255};
     static constexpr SDL_Color UI_TOOLTIP_FG{255, 255, 255, 255};
     static constexpr int SIDE_ICON_COUNT = 4;
@@ -161,7 +163,8 @@ private:
                        const char* texBase = nullptr, float scaleMul = 0.95f);
     void drawImageButton(const std::string& label, int y, bool selected, float btnScale = 1.0f,
                          bool bold = false, const char* texBase = nullptr);
-    void drawDottedLine(int y, int marginX = -1);
+    // Returns drawn height; fromBottom anchors the banner to the screen bottom.
+    int drawBanner(const char* name, int y = 0, bool fromBottom = false);
     void drawBackButton(bool selected);
     void drawSideIcon(const char* texName, int cx, int cy, float iconScale, bool focused);
     void drawExitIcon(int cx, int cy, float iconScale, bool focused);

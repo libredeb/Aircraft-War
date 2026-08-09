@@ -17,8 +17,9 @@ bool Resources::init(SDL_Renderer* renderer, const std::string& dataPath) {
         "Pause_01", "Pause_02",
         "button_1", "button_2_1", "button_2_2", "button_3_1", "button_3_2",
         "loading_01", "loading_02", "loading_03",
-        "Button_rank", "Button_setting", "Button_info", "Button_back",
-        "true", "false", "Rank", "Setting", "About_01", "About_02",
+        "Button_rank", "Button_setting", "Button_info", "Button_back", "Button_back_2",
+        "true", "false", "Rank", "Setting",
+        "Rank_01", "Setting_01", "Setting_02", "About_01", "About_02",
     };
     for (auto& name : images) {
         if (!loadTexture(name, m_dataPath + "/Image/" + name + ".png"))
