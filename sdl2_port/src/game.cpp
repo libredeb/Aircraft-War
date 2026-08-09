@@ -1528,24 +1528,9 @@ void Game::renderGameOverScreen() {
     int rightX = px + (3 * pw) / 4 - bw / 2;
 
     auto drawPanelBtn = [&](const char* label, int x, bool selected) {
-        // Same light fill as panel — focus via border + larger bold text
-        SDL_Rect dst = { x, btnY, bw, bh };
-        SDL_Texture* btn = m_res.tex("button_2_1");
-        if (btn) {
-            SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
-        } else {
-            SDL_SetRenderDrawColor(m_renderer, 235, 235, 235, 255);
-            SDL_RenderFillRect(m_renderer, &dst);
-        }
-        SDL_SetRenderDrawColor(m_renderer, selected ? 30 : 90, selected ? 30 : 90,
-                               selected ? 30 : 90, 255);
-        SDL_RenderDrawRect(m_renderer, &dst);
-        if (selected) {
-            SDL_Rect inner = { dst.x + 1, dst.y + 1, dst.w - 2, dst.h - 2 };
-            SDL_RenderDrawRect(m_renderer, &inner);
-        }
-
-        int fs = static_cast<int>((22 * 1.15f) * m_scale / 1.5f);
+        // No button PNG / no square outline — text sits on the white panel.
+        // Focus = larger, darker label (pill asset is gray and would clash).
+        int fs = static_cast<int>((22 * 1.15f * 1.20f) * m_scale / 1.5f);
         int tw = 0, th = 0;
         SDL_Color col = selected ? UI_MATTE_SELECTED : UI_MATTE;
         SDL_Texture* t = m_res.renderText(label, fs, col, &tw, &th, true);
