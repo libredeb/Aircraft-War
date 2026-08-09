@@ -543,8 +543,8 @@ void Game::update(float dt) {
     case GameState::About:
         if (m_keyBackPressed || m_keyConfirmPressed || m_keyPausePressed) {
             m_state = GameState::MainMenu;
-            m_menuFocusSide = false;
-            m_menuSelection = 0;
+            m_menuFocusSide = true;
+            m_sideIcon = 2; // Info
             m_res.playSound("button");
         }
         break;
@@ -653,8 +653,8 @@ void Game::updateSettings(float /*dt*/) {
     if (m_keyDownPressed) { m_menuSelection = (m_menuSelection + 1) % m_menuItemCount; m_res.playSound("button"); }
     if (m_keyBackPressed || m_keyPausePressed) {
         m_state = GameState::MainMenu;
-        m_menuFocusSide = false;
-        m_menuSelection = 0;
+        m_menuFocusSide = true;
+        m_sideIcon = 1; // Settings
         m_res.playSound("button");
         saveSettings();
         return;
@@ -672,8 +672,8 @@ void Game::updateSettings(float /*dt*/) {
             break;
         case 2:
             m_state = GameState::MainMenu;
-            m_menuFocusSide = false;
-            m_menuSelection = 0;
+            m_menuFocusSide = true;
+            m_sideIcon = 1; // Settings
             saveSettings();
             break;
         }
@@ -683,8 +683,8 @@ void Game::updateSettings(float /*dt*/) {
 void Game::updateRank(float /*dt*/) {
     if (m_keyBackPressed || m_keyConfirmPressed || m_keyPausePressed) {
         m_state = GameState::MainMenu;
-        m_menuFocusSide = false;
-        m_menuSelection = 0;
+        m_menuFocusSide = true;
+        m_sideIcon = 0; // Rank
         m_res.playSound("button");
     }
 }
@@ -1254,9 +1254,9 @@ void Game::drawDottedLine(int y, int marginX) {
         marginX = static_cast<int>(36 * m_scale / 1.5f);
     int x0 = marginX;
     int x1 = m_screenW - marginX;
-    int dash = std::max(4, static_cast<int>(7 * m_scale / 1.5f));
-    int gap = std::max(3, static_cast<int>(5 * m_scale / 1.5f));
-    // Thick charcoal dashes (reference Setting: header divider)
+    // Long dashes (em-dash style) instead of short dots
+    int dash = std::max(22, static_cast<int>(32 * m_scale / 1.5f));
+    int gap = std::max(8, static_cast<int>(12 * m_scale / 1.5f));
     int thickness = std::max(5, static_cast<int>(7 * m_scale / 1.5f));
     SDL_SetRenderDrawColor(m_renderer, 40, 40, 40, 255);
     for (int x = x0; x < x1; x += dash + gap) {
@@ -1309,7 +1309,7 @@ void Game::drawSideIcon(const char* texName, int cx, int cy, float iconScale, bo
 
 void Game::drawExitIcon(int cx, int cy, float iconScale, bool focused) {
     float sc = iconScale * (focused ? 1.12f : 1.0f);
-    int size = static_cast<int>(56 * sc);
+    int size = static_cast<int>(78 * sc);
     SDL_Rect dst = { cx - size / 2, cy - size / 2, size, size };
 
     // Prefer false.png (circle + X) as Exit glyph
@@ -1421,16 +1421,16 @@ void Game::renderMainMenu() {
     int startY = m_screenH * 48 / 100;
     drawImageButton("Start Game", startY, startFocused, startScale, true, "button_3");
 
-    // Side icons anchored to bottom-right
+    // Side icons anchored to bottom-right (~45% larger)
     static const char* kSideTex[3] = { "Button_rank", "Button_setting", "Button_info" };
-    static const char* kSideTip[4] = { "Leaderboard", "Settings", "Info", "Exit" };
+    static const char* kSideTip[4] = { "Rank", "Settings", "Info", "Exit" };
 
-    int marginR = static_cast<int>(28 * m_scale / 1.5f);
-    int marginB = static_cast<int>(28 * m_scale / 1.5f);
-    int iconBase = static_cast<int>(52 * m_scale / 1.5f);
-    float iconScale = m_scale * 0.72f;
+    int marginR = static_cast<int>(24 * m_scale / 1.5f);
+    int marginB = static_cast<int>(24 * m_scale / 1.5f);
+    int iconBase = static_cast<int>(76 * m_scale / 1.5f);
+    float iconScale = m_scale * 1.05f;
     int cx = m_screenW - marginR - iconBase / 2;
-    int gap = static_cast<int>(iconBase * 1.28f);
+    int gap = static_cast<int>(iconBase * 1.22f);
     // Last icon sits near bottom; stack upward
     int bottomCy = m_screenH - marginB - iconBase / 2;
 
@@ -1528,21 +1528,27 @@ void Game::renderGameOverScreen() {
     int rightX = px + (3 * pw) / 4 - bw / 2;
 
     auto drawPanelBtn = [&](const char* label, int x, bool selected) {
-        const char* texName = selected ? "button_2_2" : "button_2_1";
+        // Same light fill as panel — focus via border + larger bold text
         SDL_Rect dst = { x, btnY, bw, bh };
-        SDL_Texture* btn = m_res.tex(texName);
+        SDL_Texture* btn = m_res.tex("button_2_1");
         if (btn) {
             SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
         } else {
-            SDL_SetRenderDrawColor(m_renderer, selected ? 190 : 220, selected ? 190 : 220,
-                                   selected ? 190 : 220, 255);
+            SDL_SetRenderDrawColor(m_renderer, 235, 235, 235, 255);
             SDL_RenderFillRect(m_renderer, &dst);
-            SDL_SetRenderDrawColor(m_renderer, 60, 60, 60, 255);
-            SDL_RenderDrawRect(m_renderer, &dst);
         }
-        int fs = static_cast<int>(22 * m_scale / 1.5f);
+        SDL_SetRenderDrawColor(m_renderer, selected ? 30 : 90, selected ? 30 : 90,
+                               selected ? 30 : 90, 255);
+        SDL_RenderDrawRect(m_renderer, &dst);
+        if (selected) {
+            SDL_Rect inner = { dst.x + 1, dst.y + 1, dst.w - 2, dst.h - 2 };
+            SDL_RenderDrawRect(m_renderer, &inner);
+        }
+
+        int fs = static_cast<int>((22 * 1.15f) * m_scale / 1.5f);
         int tw = 0, th = 0;
-        SDL_Texture* t = m_res.renderText(label, fs, UI_MATTE, &tw, &th, true);
+        SDL_Color col = selected ? UI_MATTE_SELECTED : UI_MATTE;
+        SDL_Texture* t = m_res.renderText(label, fs, col, &tw, &th, true);
         if (t) {
             SDL_Rect td = { x + (bw - tw) / 2, btnY + (bh - th) / 2, tw, th };
             SDL_RenderCopy(m_renderer, t, nullptr, &td);
@@ -1557,7 +1563,7 @@ void Game::renderGameOverScreen() {
 void Game::renderSettingsMenu() {
     int margin = static_cast<int>(40 * m_scale / 1.5f);
     int titleSize = static_cast<int>(56 * m_scale / 1.5f);  // ~40% larger than base 40
-    int rowSize = static_cast<int>(30 * m_scale / 1.5f);
+    int rowSize = static_cast<int>(34 * m_scale / 1.5f);
     int y = m_screenH / 8;
 
     drawTextLeft("Setting:", titleSize, UI_MATTE, margin, y, true);
@@ -1581,7 +1587,11 @@ void Game::renderSettingsMenu() {
         bool selected = (m_menuSelection == i);
         SDL_Color col = selected ? UI_MATTE_SELECTED : UI_MATTE;
         int textY = y + (th - rowSize) / 2;
-        drawTextLeft(rows[i].label, rowSize, col, margin, textY, true);
+        // Asterisk marker for focus (star-field vibe); labels not bold
+        std::string label = selected
+            ? (std::string("* ") + rows[i].label)
+            : (std::string("  ") + rows[i].label);
+        drawTextLeft(label, rowSize, col, margin, textY, false);
 
         const char* icon = rows[i].on ? "true" : "false";
         int ix = m_screenW - margin - tw;
