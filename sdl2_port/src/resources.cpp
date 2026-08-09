@@ -17,6 +17,8 @@ bool Resources::init(SDL_Renderer* renderer, const std::string& dataPath) {
         "Pause_01", "Pause_02",
         "button_1", "button_2_1", "button_2_2", "button_3_1", "button_3_2",
         "loading_01", "loading_02", "loading_03",
+        "Button_rank", "Button_setting", "Button_info", "Button_back",
+        "true", "false", "Rank", "Setting", "About_01", "About_02",
     };
     for (auto& name : images) {
         if (!loadTexture(name, m_dataPath + "/Image/" + name + ".png"))
@@ -126,10 +128,14 @@ TTF_Font* Resources::font(int size) {
     return f;
 }
 
-SDL_Texture* Resources::renderText(const std::string& text, int size, SDL_Color color, int* w, int* h) {
+SDL_Texture* Resources::renderText(const std::string& text, int size, SDL_Color color, int* w, int* h,
+                                   bool bold) {
     TTF_Font* f = font(size);
     if (!f) { *w = *h = 0; return nullptr; }
+    int prevStyle = TTF_GetFontStyle(f);
+    TTF_SetFontStyle(f, bold ? TTF_STYLE_BOLD : TTF_STYLE_NORMAL);
     SDL_Surface* surf = TTF_RenderUTF8_Blended(f, text.c_str(), color);
+    TTF_SetFontStyle(f, prevStyle);
     if (!surf) { *w = *h = 0; return nullptr; }
     SDL_Texture* t = SDL_CreateTextureFromSurface(m_renderer, surf);
     *w = surf->w;

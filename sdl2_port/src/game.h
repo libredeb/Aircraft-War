@@ -5,11 +5,16 @@
 #include <vector>
 #include <string>
 
-enum class GameState { MainMenu, Playing, Paused, GameOver, Settings, About };
+enum class GameState { MainMenu, Playing, Paused, GameOver, Settings, About, Rank };
 
 struct SpawnTimer {
     float interval;
     float elapsed;
+};
+
+struct RankEntry {
+    std::string name;
+    int score = 0;
 };
 
 class Game {
@@ -59,6 +64,10 @@ private:
     // Matte charcoal for UI text on light backgrounds (softer than pure black)
     static constexpr SDL_Color UI_MATTE{58, 58, 58, 255};
     static constexpr SDL_Color UI_MATTE_SELECTED{40, 40, 40, 255};
+    static constexpr SDL_Color UI_TOOLTIP_BG{55, 55, 55, 255};
+    static constexpr SDL_Color UI_TOOLTIP_FG{255, 255, 255, 255};
+    static constexpr int SIDE_ICON_COUNT = 4;
+    static constexpr int MAX_RANKS = 10;
 
     // Game entities
     Player m_player;
@@ -82,9 +91,14 @@ private:
     SpawnTimer m_enemyTimers[9];
     bool m_grade2Timers = false;
 
-    // Menu
+    // Menu: Start Game (center) or side icons (Rank/Settings/Info/Exit)
     int m_menuSelection = 0;
     int m_menuItemCount = 0;
+    bool m_menuFocusSide = false;
+    int m_sideIcon = 0;
+
+    // Local leaderboard
+    std::vector<RankEntry> m_ranks;
 
     // Sound/music settings
     bool m_soundOn = true;
@@ -113,6 +127,7 @@ private:
     void updatePaused(float dt);
     void updateGameOver(float dt);
     void updateSettings(float dt);
+    void updateRank(float dt);
 
     // Gameplay
     void startGame();
@@ -136,10 +151,20 @@ private:
     void renderGameOverScreen();
     void renderSettingsMenu();
     void renderAboutScreen();
-    void drawTextCentered(const std::string& text, int fontSize, SDL_Color color, int y);
+    void renderRankScreen();
+    void drawTextCentered(const std::string& text, int fontSize, SDL_Color color, int y,
+                          bool bold = false);
+    void drawTextLeft(const std::string& text, int fontSize, SDL_Color color, int x, int y,
+                      bool bold = false);
     void drawTextureCentered(const std::string& name, int y, float scale);
     void drawMenuItems(const std::vector<std::string>& items, int selectedIdx, int startY);
-    void drawImageButton(const std::string& label, int y, bool selected, float btnScale = 1.0f);
+    void drawImageButton(const std::string& label, int y, bool selected, float btnScale = 1.0f,
+                         bool bold = false, const char* texBase = nullptr);
+    void drawDottedLine(int y, int marginX = -1);
+    void drawBackButton(bool selected);
+    void drawSideIcon(const char* texName, int cx, int cy, float iconScale, bool focused);
+    void drawExitIcon(int cx, int cy, float iconScale, bool focused);
+    void drawTooltip(const std::string& label, int rightX, int centerY);
 
     // Helpers
     void initPlayerSize();
@@ -152,4 +177,8 @@ private:
     void removeDeadEntities();
     void loadSettings();
     void saveSettings();
+    void loadRanks();
+    void saveRanks();
+    void submitScore(int score);
+    static std::string configDir();
 };

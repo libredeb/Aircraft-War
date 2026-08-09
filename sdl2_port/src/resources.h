@@ -24,7 +24,8 @@ public:
     bool musicEnabled() const { return m_musicEnabled; }
 
     TTF_Font* font(int size);
-    SDL_Texture* renderText(const std::string& text, int size, SDL_Color color, int* w, int* h);
+    SDL_Texture* renderText(const std::string& text, int size, SDL_Color color, int* w, int* h,
+                            bool bold = false);
 
 private:
     SDL_Renderer* m_renderer = nullptr;

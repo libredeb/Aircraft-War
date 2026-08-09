@@ -83,6 +83,7 @@ bool Game::init(const std::string& dataPath, int screenW, int screenH, bool full
     srand(static_cast<unsigned>(time(nullptr)));
 
     loadSettings();
+    loadRanks();
     m_res.setSoundEnabled(m_soundOn);
     m_res.setMusicEnabled(m_musicOn);
 
@@ -123,9 +124,9 @@ void Game::run() {
         update(dt);
         render();
 
-        // Cap ~60fps. Poll pad axes and move the player during the wait
-        // so D-pad response isn't gated by the frame boundary.
-        Uint32 microTick = SDL_GetTicks();
+        // Cap ~60fps. Keep polling axes during the wait so the next frame
+        // sees fresh D-pad state immediately — do NOT move the player here
+        // (that double-applied dt and caused half-screen jumps).
         while (true) {
             Uint32 elapsed = SDL_GetTicks() - frameStart;
             if (elapsed >= 16) break;
@@ -133,15 +134,9 @@ void Game::run() {
             SDL_PumpEvents();
             pollAxesOnly();
 
-            Uint32 now = SDL_GetTicks();
-            float microDt = (now - microTick) / 1000.0f;
-            microTick = now;
-            if (microDt > 0.0f && microDt < 0.05f && m_state == GameState::Playing)
-                applyPlayerMovement(microDt);
-
             elapsed = SDL_GetTicks() - frameStart;
-            if (elapsed < 12)
-                SDL_Delay(1);
+            if (elapsed < 14)
+                SDL_Delay(0);
         }
     }
 }
@@ -544,9 +539,11 @@ void Game::update(float dt) {
     case GameState::Paused:     updatePaused(dt); break;
     case GameState::GameOver:   updateGameOver(dt); break;
     case GameState::Settings:   updateSettings(dt); break;
+    case GameState::Rank:       updateRank(dt); break;
     case GameState::About:
         if (m_keyBackPressed || m_keyConfirmPressed || m_keyPausePressed) {
             m_state = GameState::MainMenu;
+            m_menuFocusSide = false;
             m_menuSelection = 0;
             m_res.playSound("button");
         }
@@ -559,15 +556,49 @@ void Game::update(float dt) {
 // ---------------------------------------------------------------------------
 
 void Game::updateMenu(float /*dt*/) {
-    m_menuItemCount = 3;
-    if (m_keyUpPressed)   { m_menuSelection = (m_menuSelection - 1 + m_menuItemCount) % m_menuItemCount; m_res.playSound("button"); }
-    if (m_keyDownPressed) { m_menuSelection = (m_menuSelection + 1) % m_menuItemCount; m_res.playSound("button"); }
+    if (!m_menuFocusSide) {
+        if (m_keyRightPressed) {
+            m_menuFocusSide = true;
+            m_res.playSound("button");
+        }
+        if (m_keyConfirmPressed) {
+            m_res.playSound("button");
+            startGame();
+        }
+        return;
+    }
+
+    if (m_keyLeftPressed) {
+        m_menuFocusSide = false;
+        m_res.playSound("button");
+        return;
+    }
+    if (m_keyUpPressed) {
+        m_sideIcon = (m_sideIcon - 1 + SIDE_ICON_COUNT) % SIDE_ICON_COUNT;
+        m_res.playSound("button");
+    }
+    if (m_keyDownPressed) {
+        m_sideIcon = (m_sideIcon + 1) % SIDE_ICON_COUNT;
+        m_res.playSound("button");
+    }
     if (m_keyConfirmPressed) {
         m_res.playSound("button");
-        switch (m_menuSelection) {
-        case 0: startGame(); break;
-        case 1: m_state = GameState::Settings; m_menuSelection = 0; break;
-        case 2: m_running = false; break;
+        switch (m_sideIcon) {
+        case 0:
+            m_state = GameState::Rank;
+            m_menuSelection = 0;
+            break;
+        case 1:
+            m_state = GameState::Settings;
+            m_menuSelection = 0;
+            break;
+        case 2:
+            m_state = GameState::About;
+            m_menuSelection = 0;
+            break;
+        case 3:
+            m_running = false;
+            break;
         }
     }
 }
@@ -582,7 +613,7 @@ void Game::updatePaused(float /*dt*/) {
         switch (m_menuSelection) {
         case 0: resumeGame(); break;
         case 1: endGame(); startGame(); break;
-        case 2: endGame(); m_state = GameState::MainMenu; m_menuSelection = 0; break;
+        case 2: endGame(); m_state = GameState::MainMenu; m_menuFocusSide = false; m_menuSelection = 0; break;
         }
     }
 }
@@ -595,17 +626,20 @@ void Game::updateGameOver(float /*dt*/) {
         m_res.playSound("button");
         switch (m_menuSelection) {
         case 0: endGame(); startGame(); break;
-        case 1: endGame(); m_state = GameState::MainMenu; m_menuSelection = 0; break;
+        case 1: endGame(); m_state = GameState::MainMenu; m_menuFocusSide = false; m_menuSelection = 0; break;
         }
     }
 }
 
 void Game::updateSettings(float /*dt*/) {
+    // 0 = music, 1 = sound effect, 2 = back
     m_menuItemCount = 3;
     if (m_keyUpPressed)   { m_menuSelection = (m_menuSelection - 1 + m_menuItemCount) % m_menuItemCount; m_res.playSound("button"); }
     if (m_keyDownPressed) { m_menuSelection = (m_menuSelection + 1) % m_menuItemCount; m_res.playSound("button"); }
     if (m_keyBackPressed || m_keyPausePressed) {
-        m_state = GameState::MainMenu; m_menuSelection = 0;
+        m_state = GameState::MainMenu;
+        m_menuFocusSide = false;
+        m_menuSelection = 0;
         m_res.playSound("button");
         saveSettings();
         return;
@@ -614,18 +648,29 @@ void Game::updateSettings(float /*dt*/) {
         m_res.playSound("button");
         switch (m_menuSelection) {
         case 0:
-            m_soundOn = !m_soundOn;
-            m_res.setSoundEnabled(m_soundOn);
-            break;
-        case 1:
             m_musicOn = !m_musicOn;
             m_res.setMusicEnabled(m_musicOn);
             break;
+        case 1:
+            m_soundOn = !m_soundOn;
+            m_res.setSoundEnabled(m_soundOn);
+            break;
         case 2:
-            m_state = GameState::MainMenu; m_menuSelection = 0;
+            m_state = GameState::MainMenu;
+            m_menuFocusSide = false;
+            m_menuSelection = 0;
             saveSettings();
             break;
         }
+    }
+}
+
+void Game::updateRank(float /*dt*/) {
+    if (m_keyBackPressed || m_keyConfirmPressed || m_keyPausePressed) {
+        m_state = GameState::MainMenu;
+        m_menuFocusSide = false;
+        m_menuSelection = 0;
+        m_res.playSound("button");
     }
 }
 
@@ -645,6 +690,7 @@ void Game::updatePlaying(float dt) {
     m_player.update(dt, m_screenW, m_screenH);
 
     if (!m_player.alive) {
+        submitScore(m_score);
         m_state = GameState::GameOver;
         m_menuSelection = 0;
         m_res.stopSound("game_music");
@@ -744,7 +790,7 @@ void Game::startGame() {
     m_player.explodeTimer = 0;
     m_player.x = (m_screenW - m_player.w) / 2.0f;
     m_player.y = m_screenH - m_player.h - 20.0f;
-    m_player.speed = m_screenW * 1.05f;
+    m_player.speed = m_screenW * 0.45f;
 
     upgradeGrade();
     m_res.playSound("game_music", -1);
@@ -1014,6 +1060,7 @@ void Game::render() {
     case GameState::GameOver:   renderEntities(); renderHUD(); renderGameOverScreen(); break;
     case GameState::Settings:   renderSettingsMenu(); break;
     case GameState::About:      renderAboutScreen(); break;
+    case GameState::Rank:       renderRankScreen(); break;
     }
 
     SDL_RenderPresent(m_renderer);
@@ -1094,20 +1141,19 @@ void Game::renderEntities() {
 
 void Game::renderHUD() {
     int margin = static_cast<int>(20 * m_scale / 1.5f);
-    int fontSize = static_cast<int>(32 * m_scale / 1.5f);
+    int fontSize = static_cast<int>(38 * m_scale / 1.5f);
 
-    // --- Top-left: Pause + Score ---
+    // --- Top-left: Pause + Score (icon slightly smaller, text larger + bold) ---
     const char* pauseName = (m_state == GameState::Paused) ? "Pause_02" : "Pause_01";
     int pw = 0, ph = 0;
-    m_res.texSizeScaled(pauseName, m_scale * 1.1f, &pw, &ph);
-    if (pw <= 0) { pw = static_cast<int>(48 * m_scale / 1.5f); ph = pw; }
+    m_res.texSizeScaled(pauseName, m_scale * 0.85f, &pw, &ph);
+    if (pw <= 0) { pw = static_cast<int>(40 * m_scale / 1.5f); ph = pw; }
 
     SDL_Rect pauseDst = { margin, margin, pw, ph };
     SDL_Texture* pt = m_res.tex(pauseName);
     if (pt) {
         SDL_RenderCopy(m_renderer, pt, nullptr, &pauseDst);
     } else {
-        // Fallback pause bars
         SDL_SetRenderDrawColor(m_renderer, UI_MATTE.r, UI_MATTE.g, UI_MATTE.b, 255);
         int barW = pw / 5;
         int gap = pw / 5;
@@ -1120,7 +1166,7 @@ void Game::renderHUD() {
     char scoreBuf[32];
     snprintf(scoreBuf, sizeof(scoreBuf), "%d", m_score);
     int tw = 0, th = 0;
-    SDL_Texture* scoreTex = m_res.renderText(scoreBuf, fontSize, UI_MATTE, &tw, &th);
+    SDL_Texture* scoreTex = m_res.renderText(scoreBuf, fontSize, UI_MATTE, &tw, &th, true);
     if (scoreTex) {
         SDL_Rect scoreDst = { margin + pw + static_cast<int>(10 * m_scale / 1.5f),
                               margin + (ph - th) / 2, tw, th };
@@ -1130,8 +1176,8 @@ void Game::renderHUD() {
 
     // --- Bottom-left: Bomb + count ---
     int bw = 0, bh = 0;
-    m_res.texSizeScaled("Bomb", m_scale * 0.7f, &bw, &bh);
-    if (bw <= 0) { bw = static_cast<int>(56 * m_scale / 1.5f); bh = bw; }
+    m_res.texSizeScaled("Bomb", m_scale * 0.62f, &bw, &bh);
+    if (bw <= 0) { bw = static_cast<int>(48 * m_scale / 1.5f); bh = bw; }
 
     int bx = margin;
     int by = m_screenH - bh - margin;
@@ -1146,7 +1192,7 @@ void Game::renderHUD() {
     char bombBuf[8];
     snprintf(bombBuf, sizeof(bombBuf), "x%d", m_bombs);
     tw = th = 0;
-    SDL_Texture* countTex = m_res.renderText(bombBuf, fontSize, UI_MATTE, &tw, &th);
+    SDL_Texture* countTex = m_res.renderText(bombBuf, fontSize, UI_MATTE, &tw, &th, true);
     if (countTex) {
         SDL_Rect textDst = { bx + bw + static_cast<int>(8 * m_scale / 1.5f),
                              by + (bh - th) / 2, tw, th };
@@ -1159,11 +1205,21 @@ void Game::renderHUD() {
 // Menu rendering
 // ---------------------------------------------------------------------------
 
-void Game::drawTextCentered(const std::string& text, int fontSize, SDL_Color color, int y) {
+void Game::drawTextCentered(const std::string& text, int fontSize, SDL_Color color, int y, bool bold) {
     int tw, th;
-    SDL_Texture* t = m_res.renderText(text, fontSize, color, &tw, &th);
+    SDL_Texture* t = m_res.renderText(text, fontSize, color, &tw, &th, bold);
     if (t) {
         SDL_Rect dst = { (m_screenW - tw) / 2, y, tw, th };
+        SDL_RenderCopy(m_renderer, t, nullptr, &dst);
+        SDL_DestroyTexture(t);
+    }
+}
+
+void Game::drawTextLeft(const std::string& text, int fontSize, SDL_Color color, int x, int y, bool bold) {
+    int tw, th;
+    SDL_Texture* t = m_res.renderText(text, fontSize, color, &tw, &th, bold);
+    if (t) {
+        SDL_Rect dst = { x, y, tw, th };
         SDL_RenderCopy(m_renderer, t, nullptr, &dst);
         SDL_DestroyTexture(t);
     }
@@ -1178,12 +1234,125 @@ void Game::drawTextureCentered(const std::string& name, int y, float texScale) {
     SDL_RenderCopy(m_renderer, t, nullptr, &dst);
 }
 
-void Game::drawImageButton(const std::string& label, int y, bool selected, float btnScale) {
-    const char* texName = selected ? "button_2_2" : "button_2_1";
+void Game::drawDottedLine(int y, int marginX) {
+    if (marginX < 0)
+        marginX = static_cast<int>(36 * m_scale / 1.5f);
+    int x0 = marginX;
+    int x1 = m_screenW - marginX;
+    int dash = std::max(3, static_cast<int>(6 * m_scale / 1.5f));
+    int gap = std::max(2, static_cast<int>(4 * m_scale / 1.5f));
+    int thickness = std::max(2, static_cast<int>(3 * m_scale / 1.5f));
+    SDL_SetRenderDrawColor(m_renderer, UI_MATTE.r, UI_MATTE.g, UI_MATTE.b, 255);
+    for (int x = x0; x < x1; x += dash + gap) {
+        int w = std::min(dash, x1 - x);
+        SDL_Rect r = { x, y, w, thickness };
+        SDL_RenderFillRect(m_renderer, &r);
+    }
+}
+
+void Game::drawBackButton(bool selected) {
+    int margin = static_cast<int>(28 * m_scale / 1.5f);
+    float sc = m_scale * (selected ? 0.95f : 0.85f);
+    int bw = 0, bh = 0;
+    m_res.texSizeScaled("Button_back", sc, &bw, &bh);
+    if (bw <= 0) {
+        bw = static_cast<int>(48 * m_scale / 1.5f);
+        bh = bw;
+    }
+    int x = margin;
+    int y = m_screenH - bh - margin;
+    SDL_Texture* t = m_res.tex("Button_back");
+    if (t) {
+        SDL_Rect dst = { x, y, bw, bh };
+        SDL_RenderCopy(m_renderer, t, nullptr, &dst);
+    } else {
+        // Fallback arrow
+        SDL_SetRenderDrawColor(m_renderer, UI_MATTE.r, UI_MATTE.g, UI_MATTE.b, 255);
+        SDL_Rect body = { x + bw / 3, y + bh / 3, bw / 2, bh / 3 };
+        SDL_RenderFillRect(m_renderer, &body);
+    }
+}
+
+void Game::drawSideIcon(const char* texName, int cx, int cy, float iconScale, bool focused) {
+    float sc = iconScale * (focused ? 1.18f : 1.0f);
+    int iw = 0, ih = 0;
+    m_res.texSizeScaled(texName, sc, &iw, &ih);
+    if (iw <= 0) {
+        iw = static_cast<int>(56 * sc);
+        ih = iw;
+    }
+    SDL_Texture* t = m_res.tex(texName);
+    SDL_Rect dst = { cx - iw / 2, cy - ih / 2, iw, ih };
+    if (t) {
+        SDL_RenderCopy(m_renderer, t, nullptr, &dst);
+    } else {
+        SDL_SetRenderDrawColor(m_renderer, 80, 80, 80, 255);
+        SDL_RenderDrawRect(m_renderer, &dst);
+    }
+}
+
+void Game::drawExitIcon(int cx, int cy, float iconScale, bool focused) {
+    float sc = iconScale * (focused ? 1.18f : 1.0f);
+    int size = static_cast<int>(56 * sc);
+    SDL_Rect dst = { cx - size / 2, cy - size / 2, size, size };
+
+    // Prefer false.png (circle + X) as Exit glyph
+    SDL_Texture* t = m_res.tex("false");
+    if (t) {
+        SDL_RenderCopy(m_renderer, t, nullptr, &dst);
+        return;
+    }
+
+    SDL_SetRenderDrawColor(m_renderer, 90, 90, 90, 255);
+    // Approximate circle with filled rect + X
+    SDL_RenderDrawRect(m_renderer, &dst);
+    int pad = size / 4;
+    SDL_RenderDrawLine(m_renderer, dst.x + pad, dst.y + pad, dst.x + size - pad, dst.y + size - pad);
+    SDL_RenderDrawLine(m_renderer, dst.x + size - pad, dst.y + pad, dst.x + pad, dst.y + size - pad);
+}
+
+void Game::drawTooltip(const std::string& label, int rightX, int centerY) {
+    int fontSize = static_cast<int>(22 * m_scale / 1.5f);
+    int tw = 0, th = 0;
+    SDL_Texture* text = m_res.renderText(label, fontSize, UI_TOOLTIP_FG, &tw, &th, true);
+    if (!text) return;
+
+    int padX = static_cast<int>(14 * m_scale / 1.5f);
+    int padY = static_cast<int>(8 * m_scale / 1.5f);
+    int boxW = tw + padX * 2;
+    int boxH = th + padY * 2;
+    int gap = static_cast<int>(10 * m_scale / 1.5f);
+    int bx = rightX - gap - boxW;
+    int by = centerY - boxH / 2;
+    if (bx < 8) bx = 8;
+
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(m_renderer, UI_TOOLTIP_BG.r, UI_TOOLTIP_BG.g, UI_TOOLTIP_BG.b, 240);
+    SDL_Rect box = { bx, by, boxW, boxH };
+    SDL_RenderFillRect(m_renderer, &box);
+    SDL_SetRenderDrawColor(m_renderer, 30, 30, 30, 255);
+    SDL_RenderDrawRect(m_renderer, &box);
+
+    SDL_Rect td = { bx + padX, by + padY, tw, th };
+    SDL_RenderCopy(m_renderer, text, nullptr, &td);
+    SDL_DestroyTexture(text);
+}
+
+void Game::drawImageButton(const std::string& label, int y, bool selected, float btnScale,
+                           bool bold, const char* texBase) {
+    const char* onName = "button_2_2";
+    const char* offName = "button_2_1";
+    if (texBase && std::string(texBase) == "button_1") {
+        onName = "button_1";
+        offName = "button_1";
+    } else if (texBase && std::string(texBase) == "button_3") {
+        onName = selected ? "button_3_2" : "button_3_1";
+        offName = onName;
+    }
+    const char* texName = selected ? onName : offName;
     int bw = 0, bh = 0;
     m_res.texSizeScaled(texName, btnScale, &bw, &bh);
 
-    // Guaranteed visible capsule even if PNG fails to load
     if (bw <= 0) {
         bw = static_cast<int>(m_screenW * 0.55f);
         bh = static_cast<int>(56 * m_scale / 1.5f);
@@ -1194,7 +1363,6 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
     if (btn) {
         SDL_RenderCopy(m_renderer, btn, nullptr, &dst);
     } else {
-        // Drawn capsule fallback
         SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
         Uint8 fill = selected ? 200 : 220;
         SDL_SetRenderDrawColor(m_renderer, fill, fill, fill, 255);
@@ -1204,9 +1372,11 @@ void Game::drawImageButton(const std::string& label, int y, bool selected, float
     }
 
     int fontSize = static_cast<int>(28 * m_scale / 1.5f);
+    if (texBase && std::string(texBase) == "button_1")
+        fontSize = static_cast<int>(32 * m_scale / 1.5f);
     int tw = 0, th = 0;
     SDL_Color color = selected ? UI_MATTE_SELECTED : UI_MATTE;
-    SDL_Texture* text = m_res.renderText(label, fontSize, color, &tw, &th);
+    SDL_Texture* text = m_res.renderText(label, fontSize, color, &tw, &th, bold);
     if (text) {
         SDL_Rect td = { dst.x + (bw - tw) / 2, dst.y + (bh - th) / 2, tw, th };
         SDL_RenderCopy(m_renderer, text, nullptr, &td);
@@ -1222,15 +1392,40 @@ void Game::drawMenuItems(const std::vector<std::string>& items, int selectedIdx,
                          : static_cast<int>(60 * m_scale / 1.5f);
 
     for (int i = 0; i < static_cast<int>(items.size()); i++) {
-        drawImageButton(items[i], startY + i * spacing, i == selectedIdx, btnScale);
+        drawImageButton(items[i], startY + i * spacing, i == selectedIdx, btnScale, true);
     }
 }
 
 void Game::renderMainMenu() {
     drawTextureCentered("LOGO", m_screenH / 6, m_scale);
 
-    std::vector<std::string> items = { "Start Game", "Settings", "Exit" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 52 / 100);
+    // Unique Start Game CTA — larger button_1, bold label, default focus
+    bool startFocused = !m_menuFocusSide;
+    float startScale = m_scale * (startFocused ? 1.12f : 1.0f);
+    int startY = m_screenH * 52 / 100;
+    drawImageButton("Start Game", startY, startFocused, startScale, true, "button_1");
+
+    // Side icons: Rank, Settings, Info, Exit
+    static const char* kSideTex[3] = { "Button_rank", "Button_setting", "Button_info" };
+    static const char* kSideTip[4] = { "Leaderboard", "Settings", "Info", "Exit" };
+
+    int marginR = static_cast<int>(36 * m_scale / 1.5f);
+    int iconBase = static_cast<int>(52 * m_scale / 1.5f);
+    float iconScale = m_scale * 0.72f;
+    int cx = m_screenW - marginR - iconBase / 2;
+    int topY = m_screenH * 28 / 100;
+    int gap = static_cast<int>(iconBase * 1.35f);
+
+    for (int i = 0; i < SIDE_ICON_COUNT; i++) {
+        int cy = topY + i * gap;
+        bool focused = m_menuFocusSide && m_sideIcon == i;
+        if (i < 3)
+            drawSideIcon(kSideTex[i], cx, cy, iconScale, focused);
+        else
+            drawExitIcon(cx, cy, iconScale, focused);
+        if (focused)
+            drawTooltip(kSideTip[i], cx - iconBase / 2, cy);
+    }
 }
 
 void Game::renderPauseMenu() {
@@ -1240,9 +1435,9 @@ void Game::renderPauseMenu() {
     SDL_RenderFillRect(m_renderer, &overlay);
 
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("PAUSED", titleSize, {210, 210, 210, 255}, m_screenH / 5);
+    drawTextCentered("PAUSED", titleSize, {210, 210, 210, 255}, m_screenH / 5, true);
 
-    std::vector<std::string> items = { "Continue", "Restart", "Quit" };
+    std::vector<std::string> items = { "continue", "restart", "quit" };
     drawMenuItems(items, m_menuSelection, m_screenH * 38 / 100);
 }
 
@@ -1253,50 +1448,156 @@ void Game::renderGameOverScreen() {
     SDL_RenderFillRect(m_renderer, &overlay);
 
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("Game Over", titleSize, {210, 210, 210, 255}, m_screenH / 6);
+    drawTextCentered("Game Over", titleSize, {210, 210, 210, 255}, m_screenH / 6, true);
 
     char scoreBuf[64];
     snprintf(scoreBuf, sizeof(scoreBuf), "Score: %d", m_score);
     int scoreSize = static_cast<int>(32 * m_scale / 1.5f);
-    drawTextCentered(scoreBuf, scoreSize, {210, 210, 210, 255}, m_screenH / 6 + titleSize + 16);
+    drawTextCentered(scoreBuf, scoreSize, {210, 210, 210, 255}, m_screenH / 6 + titleSize + 16, true);
 
     std::vector<std::string> items = { "Play Again", "Quit" };
     drawMenuItems(items, m_menuSelection, m_screenH * 48 / 100);
 }
 
 void Game::renderSettingsMenu() {
+    int margin = static_cast<int>(40 * m_scale / 1.5f);
     int titleSize = static_cast<int>(40 * m_scale / 1.5f);
-    drawTextCentered("Settings", titleSize, UI_MATTE, m_screenH / 5);
+    int rowSize = static_cast<int>(30 * m_scale / 1.5f);
+    int y = m_screenH / 8;
 
-    std::string sndLabel = std::string("Sound: ") + (m_soundOn ? "ON" : "OFF");
-    std::string musLabel = std::string("Music: ") + (m_musicOn ? "ON" : "OFF");
-    std::vector<std::string> items = { sndLabel, musLabel, "Back" };
-    drawMenuItems(items, m_menuSelection, m_screenH * 40 / 100);
+    drawTextLeft("Setting:", titleSize, UI_MATTE, margin, y, true);
+    y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
+    drawDottedLine(y);
+    y += static_cast<int>(36 * m_scale / 1.5f);
+
+    struct Row { const char* label; bool on; };
+    Row rows[2] = {
+        { "music", m_musicOn },
+        { "sound effect", m_soundOn },
+    };
+
+    float toggleScale = m_scale * 0.75f;
+    int tw = 0, th = 0;
+    m_res.texSizeScaled("true", toggleScale, &tw, &th);
+    if (tw <= 0) { tw = static_cast<int>(48 * m_scale / 1.5f); th = tw; }
+
+    int rowH = std::max(th, rowSize) + static_cast<int>(28 * m_scale / 1.5f);
+    for (int i = 0; i < 2; i++) {
+        bool selected = (m_menuSelection == i);
+        SDL_Color col = selected ? UI_MATTE_SELECTED : UI_MATTE;
+        int textY = y + (th - rowSize) / 2;
+        drawTextLeft(rows[i].label, rowSize, col, margin, textY, true);
+
+        const char* icon = rows[i].on ? "true" : "false";
+        int ix = m_screenW - margin - tw;
+        int iy = y;
+        float sc = toggleScale * (selected ? 1.12f : 1.0f);
+        int iw = 0, ih = 0;
+        m_res.texSizeScaled(icon, sc, &iw, &ih);
+        if (iw <= 0) { iw = tw; ih = th; }
+        SDL_Texture* t = m_res.tex(icon);
+        if (t) {
+            SDL_Rect dst = { ix + (tw - iw) / 2, iy + (th - ih) / 2, iw, ih };
+            SDL_RenderCopy(m_renderer, t, nullptr, &dst);
+        }
+        y += rowH;
+    }
+
+    y += static_cast<int>(8 * m_scale / 1.5f);
+    drawDottedLine(y);
+    drawBackButton(m_menuSelection == 2);
 }
 
 void Game::renderAboutScreen() {
-    int titleSize = static_cast<int>(36 * m_scale / 1.5f);
+    int margin = static_cast<int>(40 * m_scale / 1.5f);
+    int titleSize = static_cast<int>(40 * m_scale / 1.5f);
     int textSize = static_cast<int>(22 * m_scale / 1.5f);
-    int y = m_screenH / 5;
-    int lineH = static_cast<int>(35 * m_scale / 1.5f);
+    int y = m_screenH / 8;
 
-    drawTextCentered("AIRCRAFT WAR", titleSize, {255, 255, 255, 255}, y);
-    y += titleSize + lineH;
-    drawTextCentered("v2.2.0 - SDL2 Native Port", textSize, {200, 200, 200, 255}, y);
-    y += lineH;
-    drawTextCentered("D-Pad / Stick / Arrows: Move", textSize, {180, 180, 180, 255}, y);
-    y += lineH;
-    drawTextCentered("A / Z / Space: Confirm", textSize, {180, 180, 180, 255}, y);
-    y += lineH;
-    drawTextCentered("B / X / Shoulder: Bomb", textSize, {180, 180, 180, 255}, y);
-    y += lineH;
-    drawTextCentered("Start / P / Esc: Pause", textSize, {180, 180, 180, 255}, y);
-    y += lineH * 2;
-    drawTextCentered("Based on Aircraft-War by zccrs", textSize, {150, 150, 150, 255}, y);
-    y += lineH;
-    drawTextCentered("SDL2 port for Linux / RPi", textSize, {150, 150, 150, 255}, y);
-    y += lineH * 2;
-    drawTextCentered("Press any button to go back", textSize, {255, 220, 50, 255}, y);
+    drawTextLeft("Info:", titleSize, UI_MATTE, margin, y, true);
+    y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
+    drawDottedLine(y);
+    y += static_cast<int>(28 * m_scale / 1.5f);
+
+    auto line = [&](const std::string& s, SDL_Color c) {
+        drawTextCentered(s, textSize, c, y, false);
+        y += static_cast<int>(32 * m_scale / 1.5f);
+    };
+
+    line("Aircraft War", UI_MATTE);
+    line("v2.2.0 - SDL2 Native Port", {90, 90, 90, 255});
+    line("D-Pad / Stick / Arrows: Move", {100, 100, 100, 255});
+    line("A / Z / Space: Confirm", {100, 100, 100, 255});
+    line("B / X / Shoulder: Bomb", {100, 100, 100, 255});
+    line("Start / P / Esc: Pause", {100, 100, 100, 255});
+    y += static_cast<int>(8 * m_scale / 1.5f);
+    line("Based on Aircraft-War by zccrs", {120, 120, 120, 255});
+    line("SDL2 port for Linux / RPi", {120, 120, 120, 255});
+
+    y += static_cast<int>(8 * m_scale / 1.5f);
+    drawDottedLine(y);
+    drawBackButton(true);
+}
+
+void Game::renderRankScreen() {
+    int margin = static_cast<int>(40 * m_scale / 1.5f);
+    int titleSize = static_cast<int>(40 * m_scale / 1.5f);
+    int textSize = static_cast<int>(24 * m_scale / 1.5f);
+    int y = m_screenH / 8;
+
+    drawTextLeft("Rank:", titleSize, UI_MATTE, margin, y, true);
+
+    char totalBuf[64];
+    snprintf(totalBuf, sizeof(totalBuf), "total people: %d",
+             static_cast<int>(m_ranks.size()));
+    int subSize = static_cast<int>(22 * m_scale / 1.5f);
+    int titleW = 0, titleH = 0;
+    SDL_Texture* titleMeasure = m_res.renderText("Rank:", titleSize, UI_MATTE, &titleW, &titleH, true);
+    if (titleMeasure) SDL_DestroyTexture(titleMeasure);
+    int tw = 0, th = 0;
+    SDL_Texture* sub = m_res.renderText(totalBuf, subSize, {100, 100, 100, 255}, &tw, &th, false);
+    if (sub) {
+        SDL_Rect dst = {
+            margin + titleW + static_cast<int>(16 * m_scale / 1.5f),
+            y + (titleSize - th) / 2,
+            tw, th
+        };
+        SDL_RenderCopy(m_renderer, sub, nullptr, &dst);
+        SDL_DestroyTexture(sub);
+    }
+
+    y += titleSize + static_cast<int>(12 * m_scale / 1.5f);
+    drawDottedLine(y);
+    y += static_cast<int>(24 * m_scale / 1.5f);
+
+    int rowH = static_cast<int>(40 * m_scale / 1.5f);
+    int maxRows = std::min(static_cast<int>(m_ranks.size()), MAX_RANKS);
+    if (maxRows == 0) {
+        drawTextCentered("No scores yet", textSize, {120, 120, 120, 255}, y + rowH, false);
+    }
+    for (int i = 0; i < maxRows; i++) {
+        char rankBuf[8];
+        snprintf(rankBuf, sizeof(rankBuf), "%d", i + 1);
+        drawTextLeft(rankBuf, textSize, UI_MATTE, margin, y, true);
+
+        drawTextLeft(m_ranks[i].name, textSize, UI_MATTE,
+                     margin + static_cast<int>(48 * m_scale / 1.5f), y, false);
+
+        char scoreBuf[32];
+        snprintf(scoreBuf, sizeof(scoreBuf), "%d", m_ranks[i].score);
+        int sw = 0, sh = 0;
+        SDL_Texture* st = m_res.renderText(scoreBuf, textSize, UI_MATTE, &sw, &sh, true);
+        if (st) {
+            SDL_Rect dst = { m_screenW - margin - sw, y, sw, sh };
+            SDL_RenderCopy(m_renderer, st, nullptr, &dst);
+            SDL_DestroyTexture(st);
+        }
+        y += rowH;
+    }
+
+    y = m_screenH - static_cast<int>(100 * m_scale / 1.5f);
+    drawDottedLine(y);
+    drawBackButton(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,18 +1618,17 @@ std::string Game::texNameForPlayer(int frame) const {
 }
 
 // ---------------------------------------------------------------------------
-// Settings persistence
+// Settings & local rank persistence
 // ---------------------------------------------------------------------------
 
-static std::string settingsPath() {
+std::string Game::configDir() {
     const char* home = getenv("HOME");
     if (!home) home = "/tmp";
-    std::string dir = std::string(home) + "/.config/aircraftwar";
-    return dir + "/settings.cfg";
+    return std::string(home) + "/.config/aircraftwar";
 }
 
 void Game::loadSettings() {
-    std::ifstream f(settingsPath());
+    std::ifstream f(configDir() + "/settings.cfg");
     if (!f.is_open()) return;
     std::string line;
     while (std::getline(f, line)) {
@@ -1342,14 +1642,54 @@ void Game::loadSettings() {
 }
 
 void Game::saveSettings() {
-    std::string path = settingsPath();
-    std::string dir = path.substr(0, path.rfind('/'));
-
+    std::string dir = configDir();
     std::string mkdirCmd = "mkdir -p " + dir;
     system(mkdirCmd.c_str());
 
-    std::ofstream f(path);
+    std::ofstream f(dir + "/settings.cfg");
     if (!f.is_open()) return;
     f << "sound=" << (m_soundOn ? "1" : "0") << "\n";
     f << "music=" << (m_musicOn ? "1" : "0") << "\n";
+}
+
+void Game::loadRanks() {
+    m_ranks.clear();
+    std::ifstream f(configDir() + "/ranks.cfg");
+    if (!f.is_open()) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty()) continue;
+        auto comma = line.rfind(',');
+        if (comma == std::string::npos) continue;
+        RankEntry e;
+        e.name = line.substr(0, comma);
+        e.score = atoi(line.substr(comma + 1).c_str());
+        if (e.name.empty()) e.name = "Player";
+        m_ranks.push_back(e);
+        if (static_cast<int>(m_ranks.size()) >= MAX_RANKS) break;
+    }
+}
+
+void Game::saveRanks() {
+    std::string dir = configDir();
+    std::string mkdirCmd = "mkdir -p " + dir;
+    system(mkdirCmd.c_str());
+
+    std::ofstream f(dir + "/ranks.cfg");
+    if (!f.is_open()) return;
+    for (const auto& e : m_ranks)
+        f << e.name << "," << e.score << "\n";
+}
+
+void Game::submitScore(int score) {
+    if (score <= 0) return;
+    RankEntry e;
+    e.name = "Player";
+    e.score = score;
+    m_ranks.push_back(e);
+    std::sort(m_ranks.begin(), m_ranks.end(),
+              [](const RankEntry& a, const RankEntry& b) { return a.score > b.score; });
+    if (static_cast<int>(m_ranks.size()) > MAX_RANKS)
+        m_ranks.resize(MAX_RANKS);
+    saveRanks();
 }
