@@ -1082,7 +1082,7 @@ void Game::render() {
 }
 
 void Game::renderBackground() {
-    SDL_Texture* bg = m_res.tex("Blackground_MeeGo");
+    SDL_Texture* bg = m_res.tex("Blackground_Symbian");
     if (!bg) return;
 
     SDL_Rect dst1 = { 0, static_cast<int>(m_bgScrollY1), m_screenW, m_screenH };
